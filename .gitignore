@@ -1,0 +1,16 @@
+# Environment variables (API keys, secrets)
+.env
+
+# Python
+.venv/
+__pycache__/
+*.pyc
+
+# Data directories
+postgres_data/
+chroma_db/
+chroma_data/
+
+# Claude/OMC local config
+.claude/
+.omc/
