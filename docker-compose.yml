@@ -1,0 +1,23 @@
+version: '3.8'
+services:
+  db:
+    image: postgres:15
+    container_name: postgres_db
+    restart: always
+    environment:
+      POSTGRES_USER: sang  # 원하는 사용자명
+      POSTGRES_PASSWORD: mypassword123  # 원하는 비밀번호
+      POSTGRES_DB: chat_db
+    ports:
+      - "5432:5432"
+    volumes:
+      - ./postgres_data:/var/lib/postgresql/data # 데이터 영구 저장
+
+  chromadb:
+    image: chromadb/chroma:latest
+    container_name: chromadb
+    restart: always
+    ports:
+      - "8001:8000"
+    volumes:
+      - ./chroma_data:/chroma/chroma
