@@ -41,7 +41,7 @@ SYSTEM_PROMPT = """너는 카카오톡 채팅방의 친절한 AI 어시스턴트
 대화 기록을 기억하고 있으니, 이전 대화 맥락을 참고해서 답변해줘."""
 
 # LLM
-llm = ChatOpenAI(model="gpt-4o-mini", api_key=OPENAI_API_KEY)
+llm = ChatOpenAI(model="gpt-4o-mini", api_key=OPENAI_API_KEY, temperature=0.7, max_tokens=1000, verbose=True)
 
 # ChromaDB vector store
 embeddings = OpenAIEmbeddings(api_key=OPENAI_API_KEY)
