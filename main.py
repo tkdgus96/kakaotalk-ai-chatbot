@@ -198,7 +198,7 @@ async def handle_msg(data: KakaoMsg):
     buffer_context = "\n".join(recent_buffer) if recent_buffer else ""
 
     # 4. Build system prompt with RAG context + buffer
-    system_content = SYSTEM_PROMPT
+    system_content = SYSTEM_PROMPT + f"\n\n현재 대화 상대: {data.sender}"
     if context:
         system_content += f"\n\n참고할 수 있는 이전 대화 내용:\n{context}"
     if buffer_context:
@@ -228,13 +228,17 @@ async def handle_msg(data: KakaoMsg):
                 messages.append(ToolMessage(content=result, tool_call_id=tc["id"]))
         response = llm_with_tools.invoke(messages)
 
-    # 6. Save to SQL history
-    history.add_user_message(data.msg)
+    # 6. Save to SQL history (include sender)
+    history.add_user_message(f"[{data.sender}]: {data.msg}")
     history.add_ai_message(response.content)
 
-    # 7. Save AI response to ChromaDB too
+    # 7. Save to ChromaDB (user message + AI response)
     now = datetime.now().isoformat()
     vectorstore.add_documents([
+        Document(
+            page_content=f"[{data.sender}]: {data.msg}",
+            metadata={"room_id": str(data.room_id), "role": "user", "sender": data.sender, "timestamp": now},
+        ),
         Document(
             page_content=f"[AI]: {response.content}",
             metadata={"room_id": str(data.room_id), "role": "assistant", "timestamp": now},
