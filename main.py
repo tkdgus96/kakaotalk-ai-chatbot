@@ -14,6 +14,7 @@ from langchain_community.chat_message_histories import SQLChatMessageHistory
 from langchain_chroma import Chroma
 from langchain_core.documents import Document
 from langchain_core.tools import tool
+from exa_py import Exa
 
 load_dotenv()
 
@@ -35,10 +36,13 @@ CONNECTION_STRING = os.getenv("DB_CONNECTION_STRING")
 ALLOWED_ROOMS = set(int(r) for r in os.getenv("ALLOWED_ROOMS", "").split(",") if r.strip())
 NEXON_API_KEY = os.getenv("NEXON_API_KEY")
 NEXON_API_BASE = "https://open.api.nexon.com/maplestory/v1"
+EXA_API_KEY = os.getenv("EXA_API_KEY")
+exa = Exa(api_key=EXA_API_KEY)
 
 SYSTEM_PROMPT = """너는 카카오톡 채팅방의 친절한 AI 어시스턴트야.
 친근하고 도움이 되는 말투로 대화해줘. 이모지도 적절히 사용해줘.
-대화 기록을 기억하고 있으니, 이전 대화 맥락을 참고해서 답변해줘."""
+대화 기록을 기억하고 있으니, 이전 대화 맥락을 참고해서 답변해줘.
+모르는 정보나 최신 정보가 필요한 질문을 받으면, 웹 검색 도구를 사용해서 정확한 정보를 찾아서 답변해줘."""
 
 # LLM
 llm = ChatOpenAI(model="gpt-4o-mini", api_key=OPENAI_API_KEY, temperature=0.7, max_tokens=1000, verbose=True)
@@ -88,9 +92,30 @@ async def lookup_maplestory_character(character_name: str) -> str:
 
     return json.dumps(info, ensure_ascii=False, indent=2)
 
+@tool
+async def web_search(query: str) -> str:
+    """웹에서 최신 정보를 검색합니다. 유저가 실시간 정보, 뉴스, 최신 이벤트, 또는 AI가 모르는 정보에 대해 물어볼 때 사용하세요."""
+    try:
+        response = exa.search(
+            query,
+            num_results=3,
+            type="auto",
+            contents={
+                "text": {
+                    "max_characters": 3000,
+                }
+            },
+        )
+        results = []
+        for r in response.results:
+            results.append(f"제목: {r.title}\nURL: {r.url}\n내용: {r.text[:1000]}")
+        return "\n\n---\n\n".join(results) if results else "검색 결과가 없습니다."
+    except Exception as e:
+        return f"검색 중 오류가 발생했습니다: {str(e)}"
+
 
 # LLM with tool calling
-tools = [lookup_maplestory_character]
+tools = [lookup_maplestory_character, web_search]
 llm_with_tools = llm.bind_tools(tools)
 
 
@@ -219,13 +244,17 @@ async def handle_msg(data: KakaoMsg):
     # 5. Invoke LLM (with tool calling support)
     response = llm_with_tools.invoke(messages)
 
-    # Handle tool calls if the LLM wants to look up a character
+    # Handle tool calls
+    tool_map = {t.name: t for t in tools}
     while response.tool_calls:
         messages.append(response)
         for tc in response.tool_calls:
-            if tc["name"] == "lookup_maplestory_character":
-                result = await lookup_maplestory_character.ainvoke(tc["args"])
-                messages.append(ToolMessage(content=result, tool_call_id=tc["id"]))
+            func = tool_map.get(tc["name"])
+            if func:
+                result = await func.ainvoke(tc["args"])
+            else:
+                result = f"Unknown tool: {tc['name']}"
+            messages.append(ToolMessage(content=result, tool_call_id=tc["id"]))
         response = llm_with_tools.invoke(messages)
 
     # 6. Save to SQL history (include sender)
