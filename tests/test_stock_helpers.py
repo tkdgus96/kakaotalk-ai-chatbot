@@ -1,6 +1,6 @@
 import unittest
 
-from app.tools.stock import get_krx_code, normalize_stock_candidates
+from app.tools.stock import get_krx_code, is_symbol_like, normalize_stock_candidates
 
 
 class StockHelperTests(unittest.TestCase):
@@ -16,6 +16,23 @@ class StockHelperTests(unittest.TestCase):
 
     def test_get_krx_code_non_krx_symbol(self):
         self.assertIsNone(get_krx_code("META"))
+
+    def test_normalize_stock_candidates_natural_language_phrase(self):
+        candidates = normalize_stock_candidates("meta's stock price")
+        self.assertIn("META", candidates)
+
+    def test_is_symbol_like(self):
+        self.assertTrue(is_symbol_like("PLTR"))
+        self.assertTrue(is_symbol_like("005930.KS"))
+        self.assertFalse(is_symbol_like("팔란티어"))
+        self.assertFalse(is_symbol_like("martin"))
+
+    def test_normalize_stock_candidates_palantir_alias(self):
+        self.assertEqual(normalize_stock_candidates("팔란티어"), ["PLTR"])
+        self.assertEqual(normalize_stock_candidates("palantir"), ["PLTR"])
+
+    def test_normalize_stock_candidates_boeing_alias(self):
+        self.assertEqual(normalize_stock_candidates("보잉"), ["BA"])
 
 
 if __name__ == "__main__":
