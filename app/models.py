@@ -1,4 +1,5 @@
 from pydantic import BaseModel
+from typing import Literal
 
 
 class KakaoMsg(BaseModel):
@@ -7,3 +8,7 @@ class KakaoMsg(BaseModel):
     msg: str
     sender: str
     is_command: bool
+
+
+class OutboxAckRequest(BaseModel):
+    status: Literal["SENT", "FAILED"]

@@ -13,6 +13,13 @@ FastAPI-based KakaoTalk chatbot backend with:
 - Message buffering + periodic context summarization
 - RAG retrieval from Chroma before each command response
 - Tool-calling flow (LLM can call external tools during response generation)
+- MapleStory weekly boss management MVP
+  - Weekly boss registration and weekly schedule setting
+  - Thursday reset reminder scheduler (KST)
+  - 30-minute pre-boss reminder scheduler
+  - Drop registration + mesos parser (억/만)
+  - Settlement creation/completion/history
+  - Read-only settlement page: `/s/{publicToken}`
 
 ## Project Structure
 
@@ -107,6 +114,30 @@ Behavior:
 - If `room_id` is not in allowlist, bot returns empty answer.
 - If `is_command` is `false`, message is buffered only.
 - If `is_command` is `true`, bot retrieves context + history and responds.
+- If message starts with supported boss command, boss command is handled directly.
+
+### `GET /s/{publicToken}`
+- Read-only settlement page for mobile view.
+- No login required in MVP.
+
+## Boss Commands
+
+- `!보스매주 [bossName]`
+- `!보스시간 [bossName] [dayOfWeek] [HH:mm]`
+- `!이번주보스`
+- `!드랍 [itemName] [price]`
+- `!드랍 [bossName] [itemName] [price]`
+- `!정산 [bossName] [memberCount]`
+- `!정산완료 [settlementCode]`
+- `!정산목록`
+
+Examples:
+- `!보스매주 검마`
+- `!보스시간 검마 토요일 22:00`
+- `!드랍 루컨마 84억`
+- `!드랍 검마 몽벨 220억`
+- `!정산 검마 4`
+- `!정산완료 B105`
 
 ### Room management
 
@@ -117,6 +148,20 @@ Behavior:
 ### Debug
 
 - `POST /debug` echoes raw request JSON.
+
+### Bot Outbox (Kakao sender bridge)
+
+- `GET /bot/outbox?bot_id=main&limit=10`
+  - Returns `PENDING` messages with `scheduled_at <= now`.
+  - Response items: `id`, `room_id`, `room_name`, `message`.
+- `POST /bot/outbox/{id}/ack`
+  - Body: `{"status":"SENT"}` or `{"status":"FAILED"}`
+  - Marks outbox delivery result. `SENT` sets `sent_at`.
+
+Delivery model:
+- Backend scheduler never sends KakaoTalk directly.
+- Scheduler writes reminders to `bot_outbox`.
+- Android Kakao script polls `/bot/outbox`, calls `Api.replyRoom(room_name, message)`, then `ack`.
 
 ## Tests
 
@@ -130,3 +175,5 @@ env ANONYMIZED_TELEMETRY=false CHROMA_TELEMETRY=false \
 - `DB_CONNECTION_STRING` must point to a reachable PostgreSQL instance.
 - Chroma persistent data is stored in `./chroma_db`.
 - Stock tool uses multiple sources/fallbacks; for best KRX reliability, set KIS credentials.
+- Boss MVP schema is in `migrations/001_boss_mvp.sql` and auto-initialized on startup.
+- Outbox/room metadata schema is in `migrations/002_outbox_and_room_metadata.sql` and auto-initialized on startup.

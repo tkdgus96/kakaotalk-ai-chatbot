@@ -19,6 +19,13 @@ class Settings:
     rag_search_k: int
     buffer_size: int
     max_history_messages: int
+    boss_db_url: str
+    public_base_url: str
+    weekly_reset_reminder_hour: int
+    weekly_reset_reminder_minute: int
+    reminder_offset_minutes: int
+    scheduler_interval_seconds: int
+    drop_active_window_hours: int
 
 
 settings = Settings(
@@ -32,6 +39,13 @@ settings = Settings(
     kis_app_secret=os.getenv("KIS_APP_SECRET"),
     kis_base_url=os.getenv("KIS_BASE_URL", "https://openapi.koreainvestment.com:9443"),
     rag_search_k=int(os.getenv("RAG_SEARCH_K", "10")),
-    buffer_size=20,
+    buffer_size=50,
     max_history_messages=10,
+    boss_db_url=os.getenv("BOSS_DB_URL", "sqlite:///./data/boss_bot.db"),
+    public_base_url=os.getenv("PUBLIC_BASE_URL", "http://localhost:8000"),
+    weekly_reset_reminder_hour=int(os.getenv("WEEKLY_RESET_REMINDER_HOUR", "12")),
+    weekly_reset_reminder_minute=int(os.getenv("WEEKLY_RESET_REMINDER_MINUTE", "0")),
+    reminder_offset_minutes=int(os.getenv("BOSS_REMINDER_OFFSET_MINUTES", "30")),
+    scheduler_interval_seconds=int(os.getenv("BOSS_SCHEDULER_INTERVAL_SECONDS", "60")),
+    drop_active_window_hours=int(os.getenv("DROP_ACTIVE_WINDOW_HOURS", "6")),
 )

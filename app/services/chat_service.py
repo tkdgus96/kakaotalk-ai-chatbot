@@ -5,7 +5,8 @@ from langchain_core.documents import Document
 from langchain_core.messages import HumanMessage, SystemMessage, ToolMessage
 
 from app.config import settings
-from app.dependencies import llm, logger, message_buffers, vectorstore
+from app.dependencies import boss_service, llm, logger, message_buffers, vectorstore
+from app.boss.services.command_parser import parse_command
 from app.models import KakaoMsg
 from app.prompts import FILTER_SYSTEM_PROMPT, SUMMARIZE_SYSTEM_PROMPT, SYSTEM_PROMPT
 from app.tools import llm_with_tools, tools
@@ -53,6 +54,18 @@ async def summarize_history(messages):
 
 
 async def handle_chat(data: KakaoMsg):
+    boss_service.touch_room(data.room_id, data.room)
+    logger.info("chat_in room_id=%s is_command=%s msg=%r", data.room_id, data.is_command, data.msg)
+
+    parsed = parse_command(data.msg)
+    if parsed:
+        logger.info("parsed_command room_id=%s name=%s args=%r", data.room_id, parsed.name, parsed.args)
+        answer = handle_boss_command(data.room_id, data.sender, parsed.name, parsed.args)
+        if answer is not None:
+            return {"answer": answer}
+    elif data.msg.strip().startswith(("!", "！")):
+        logger.info("Command-like message not parsed: room_id=%s raw=%r", data.room_id, data.msg)
+
     if data.room_id not in settings.allowed_rooms:
         logger.info("New chatroom detected: '%s' (sender: %s)", data.room_id, data.sender)
         return {"answer": ""}
@@ -68,8 +81,18 @@ async def handle_chat(data: KakaoMsg):
         connection_string=settings.db_connection_string,
     )
 
-    relevant_docs = vectorstore.similarity_search(data.msg, k=settings.rag_search_k)
-    context = "\n".join([doc.page_content for doc in relevant_docs]) if relevant_docs else ""
+    relevant_docs = vectorstore.similarity_search(
+        data.msg,
+        k=settings.rag_search_k,
+        filter={"room_id": str(data.room_id)},
+    )
+    summary_docs = vectorstore.similarity_search(
+        data.msg,
+        k=max(5, settings.rag_search_k // 2),
+        filter={"$and": [{"room_id": str(data.room_id)}, {"role": "context_summary"}]},
+    )
+    merged_docs = summary_docs + relevant_docs
+    context = "\n".join([doc.page_content for doc in merged_docs]) if merged_docs else ""
 
     recent_buffer = message_buffers.get(data.room_id, [])
     buffer_context = "\n".join(recent_buffer) if recent_buffer else ""
@@ -123,3 +146,62 @@ async def handle_chat(data: KakaoMsg):
     )
 
     return {"answer": response.content}
+
+
+def handle_boss_command(room_id: int, sender: str, name: str, args: list[str]) -> str | None:
+    if name in ("!보스도움", "!보스도움말", "!보스help", "!bosshelp"):
+        return (
+            "[보스 기능 사용법]\n\n"
+            "1) 주간 보스 등록\n"
+            "!보스매주 [bossName]\n"
+            "예) !보스매주 검마\n\n"
+            "2) 이번 주 보스 시간 등록/수정\n"
+            "!보스시간 [bossName] [요일] [HH:mm]\n"
+            "예) !보스시간 검마 토요일 22:00\n\n"
+            "3) 이번 주 보스 일정 조회\n"
+            "!이번주보스\n\n"
+            "4) 드랍 등록\n"
+            "!드랍 [itemName] [price]\n"
+            "!드랍 [bossName] [itemName] [price]\n"
+            "예) !드랍 루컨마 84억\n"
+            "예) !드랍 검마 몽벨 220억\n\n"
+            "5) 정산\n"
+            "!정산 [bossName] [memberCount]\n"
+            "예) !정산 검마 4\n\n"
+            "6) 정산 완료 처리\n"
+            "!정산완료 [settlementCode]\n"
+            "예) !정산완료 B105\n\n"
+            "7) 최근 정산 목록\n"
+            "!정산목록"
+        )
+
+    if name == "!보스매주":
+        if len(args) != 1:
+            return "사용법: !보스매주 [bossName]"
+        return boss_service.register_weekly_boss(room_id, args[0])
+
+    if name == "!보스시간":
+        if len(args) != 3:
+            return "사용법: !보스시간 [bossName] [dayOfWeek] [HH:mm]"
+        return boss_service.set_boss_time(room_id, args[0], args[1], args[2])
+
+    if name == "!이번주보스":
+        return boss_service.list_week_bosses(room_id)
+
+    if name == "!드랍":
+        return boss_service.register_drop(room_id, sender, args)
+
+    if name == "!정산":
+        if len(args) != 2:
+            return "사용법: !정산 [bossName] [memberCount]"
+        return boss_service.create_settlement(room_id, sender, args[0], args[1])
+
+    if name == "!정산완료":
+        if len(args) != 1:
+            return "사용법: !정산완료 [settlementCode]"
+        return boss_service.complete_settlement(args[0])
+
+    if name == "!정산목록":
+        return boss_service.settlement_history(room_id)
+
+    return None

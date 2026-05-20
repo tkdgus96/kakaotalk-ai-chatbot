@@ -6,6 +6,8 @@ from langchain_chroma import Chroma
 from langchain_openai import ChatOpenAI, OpenAIEmbeddings
 
 from app.config import settings
+from app.boss.repositories.boss_repository import BossRepository
+from app.boss.services.boss_service import BossService
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
@@ -28,3 +30,6 @@ vectorstore = Chroma(
 )
 
 exa = Exa(api_key=settings.exa_api_key)
+
+boss_repo = BossRepository()
+boss_service = BossService(boss_repo)
