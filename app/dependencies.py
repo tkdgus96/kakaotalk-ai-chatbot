@@ -27,6 +27,17 @@ vectorstore = Chroma(
     embedding_function=embeddings,
     persist_directory="./chroma_db",
 )
+user_profile_store = Chroma(
+    collection_name="user_profile",
+    embedding_function=embeddings,
+    persist_directory="./chroma_db",
+)
+
+fact_extractor_llm = ChatOpenAI(
+    model="gpt-4o-mini",
+    api_key=settings.openai_api_key,
+    temperature=0,
+)
 
 boss_repo = BossRepository()
 boss_service = BossService(boss_repo)
