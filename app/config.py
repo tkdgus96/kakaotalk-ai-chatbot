@@ -5,6 +5,21 @@ from dotenv import load_dotenv
 load_dotenv()
 
 
+def _parse_variant_overrides(raw: str) -> dict[int, str]:
+    """Parse 'room_id:variant,room_id:variant' string into a dict."""
+    out: dict[int, str] = {}
+    for pair in raw.split(","):
+        pair = pair.strip()
+        if not pair or ":" not in pair:
+            continue
+        rid_str, variant = pair.split(":", 1)
+        try:
+            out[int(rid_str.strip())] = variant.strip()
+        except ValueError:
+            continue
+    return out
+
+
 @dataclass
 class Settings:
     openai_api_key: str | None
@@ -31,6 +46,8 @@ class Settings:
     drop_active_window_hours: int
     playground_room_id: int
     playground_sender: str
+    prompt_variant_overrides: dict[int, str]
+    default_prompt_variant: str
 
 
 settings = Settings(
@@ -58,4 +75,6 @@ settings = Settings(
     drop_active_window_hours=int(os.getenv("DROP_ACTIVE_WINDOW_HOURS", "6")),
     playground_room_id=int(os.getenv("PLAYGROUND_ROOM_ID", "999999999")),
     playground_sender=os.getenv("PLAYGROUND_SENDER", "dev_user"),
+    prompt_variant_overrides=_parse_variant_overrides(os.getenv("PROMPT_VARIANT_OVERRIDES", "")),
+    default_prompt_variant=os.getenv("DEFAULT_PROMPT_VARIANT", "default"),
 )
