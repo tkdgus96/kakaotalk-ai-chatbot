@@ -8,7 +8,8 @@ from langchain_core.messages import HumanMessage, SystemMessage
 from langchain_core.tools import tool
 
 from app.config import settings
-from app.dependencies import exa, llm, logger
+from app.dependencies import llm, logger
+from app.tools.search import _tavily
 
 _kis_access_token = None
 _kis_access_token_expiry = 0.0
@@ -101,7 +102,7 @@ def _extract_first_ticker(text: str | None):
     return None
 
 
-def _resolve_symbol_with_llm(raw_query: str):
+async def _resolve_symbol_with_llm(raw_query: str):
     prompt = [
         SystemMessage(
             content=(
@@ -114,7 +115,7 @@ def _resolve_symbol_with_llm(raw_query: str):
         HumanMessage(content=raw_query),
     ]
     try:
-        response = llm.invoke(prompt)
+        response = await llm.ainvoke(prompt)
         ticker = _extract_first_ticker(str(response.content).strip())
         if ticker and is_symbol_like(ticker):
             return ticker
@@ -342,7 +343,7 @@ async def get_stock_quote(symbol_or_name: str) -> str:
         async with httpx.AsyncClient(timeout=10.0) as client:
             # For plain text company names (e.g. "팔란티어"), resolve ticker first.
             if not any(is_symbol_like(sym) for sym in candidate_symbols):
-                llm_symbol = _resolve_symbol_with_llm(raw_query)
+                llm_symbol = await _resolve_symbol_with_llm(raw_query)
                 if llm_symbol:
                     candidate_symbols.insert(0, llm_symbol)
                 search_resp = await client.get(
@@ -391,18 +392,21 @@ async def get_stock_quote(symbol_or_name: str) -> str:
                         quote, err = await _fetch_yahoo_quote(client, resolved_symbol)
 
             if err and "HTTP 429" in err:
-                try:
-                    fallback = exa.search(
-                        f"{raw_query} 주가 현재 KRX 코스피 코스닥",
-                        num_results=3,
-                        type="auto",
-                        contents={"text": {"max_characters": 1200}},
-                    )
-                    snippets = [f"제목: {r.title}\nURL: {r.url}\n내용: {r.text[:500]}" for r in fallback.results]
-                    if snippets:
-                        return "실시간 시세 API가 일시적으로 혼잡합니다(429).\n대체 웹 검색 결과를 참고해 주세요:\n\n" + "\n\n---\n\n".join(snippets)
-                except Exception:
-                    pass
+                if _tavily is not None:
+                    try:
+                        fallback = await _tavily.search(
+                            query=f"{raw_query} 주가 현재 KRX 코스피 코스닥",
+                            search_depth="basic",
+                            max_results=3,
+                        )
+                        snippets = [
+                            f"제목: {r.get('title')}\nURL: {r.get('url')}\n내용: {(r.get('content') or '')[:500]}"
+                            for r in fallback.get("results", [])
+                        ]
+                        if snippets:
+                            return "실시간 시세 API가 일시적으로 혼잡합니다(429).\n대체 웹 검색 결과를 참고해 주세요:\n\n" + "\n\n---\n\n".join(snippets)
+                    except Exception:
+                        pass
                 return f"실시간 시세 API가 일시적으로 혼잡합니다(429). 잠시 후 다시 시도하거나 심볼로 재시도해 주세요. (입력: {raw_query})"
 
             if err:

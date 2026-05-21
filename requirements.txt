@@ -10,4 +10,6 @@ psycopg2-binary
 sqlalchemy
 python-dotenv
 httpx
-exa-py
+tavily-python
+langgraph
+langgraph-cli[inmem]

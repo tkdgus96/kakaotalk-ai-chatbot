@@ -10,6 +10,10 @@ __pycache__/
 postgres_data/
 chroma_db/
 chroma_data/
+data/
+
+# LangGraph dev runtime cache
+.langgraph_api/
 
 # Claude/OMC local config
 .claude/

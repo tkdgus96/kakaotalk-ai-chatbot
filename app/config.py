@@ -12,7 +12,9 @@ class Settings:
     allowed_rooms: set[int]
     nexon_api_key: str | None
     nexon_api_base: str
-    exa_api_key: str | None
+    naver_client_id: str | None
+    naver_client_secret: str | None
+    tavily_api_key: str | None
     kis_app_key: str | None
     kis_app_secret: str | None
     kis_base_url: str
@@ -26,6 +28,8 @@ class Settings:
     reminder_offset_minutes: int
     scheduler_interval_seconds: int
     drop_active_window_hours: int
+    playground_room_id: int
+    playground_sender: str
 
 
 settings = Settings(
@@ -34,7 +38,9 @@ settings = Settings(
     allowed_rooms=set(int(r) for r in os.getenv("ALLOWED_ROOMS", "").split(",") if r.strip()),
     nexon_api_key=os.getenv("NEXON_API_KEY"),
     nexon_api_base="https://open.api.nexon.com/maplestory/v1",
-    exa_api_key=os.getenv("EXA_API_KEY"),
+    naver_client_id=os.getenv("NAVER_CLIENT_ID"),
+    naver_client_secret=os.getenv("NAVER_CLIENT_SECRET"),
+    tavily_api_key=os.getenv("TAVILY_API_KEY"),
     kis_app_key=os.getenv("KIS_APP_KEY"),
     kis_app_secret=os.getenv("KIS_APP_SECRET"),
     kis_base_url=os.getenv("KIS_BASE_URL", "https://openapi.koreainvestment.com:9443"),
@@ -48,4 +54,6 @@ settings = Settings(
     reminder_offset_minutes=int(os.getenv("BOSS_REMINDER_OFFSET_MINUTES", "30")),
     scheduler_interval_seconds=int(os.getenv("BOSS_SCHEDULER_INTERVAL_SECONDS", "60")),
     drop_active_window_hours=int(os.getenv("DROP_ACTIVE_WINDOW_HOURS", "6")),
+    playground_room_id=int(os.getenv("PLAYGROUND_ROOM_ID", "999999999")),
+    playground_sender=os.getenv("PLAYGROUND_SENDER", "dev_user"),
 )

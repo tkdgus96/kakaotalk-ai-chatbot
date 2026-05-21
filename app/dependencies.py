@@ -1,7 +1,6 @@
 import logging
 from collections import defaultdict
 
-from exa_py import Exa
 from langchain_chroma import Chroma
 from langchain_openai import ChatOpenAI, OpenAIEmbeddings
 
@@ -28,8 +27,6 @@ vectorstore = Chroma(
     embedding_function=embeddings,
     persist_directory="./chroma_db",
 )
-
-exa = Exa(api_key=settings.exa_api_key)
 
 boss_repo = BossRepository()
 boss_service = BossService(boss_repo)
