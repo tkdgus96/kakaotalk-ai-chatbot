@@ -113,5 +113,12 @@ CREATE TABLE IF NOT EXISTS bot_outbox (
   created_at TEXT NOT NULL,
   updated_at TEXT NOT NULL
 );
+
+CREATE TABLE IF NOT EXISTS room_persona (
+  room_id INTEGER PRIMARY KEY,
+  persona_text TEXT NOT NULL,
+  sample_size INTEGER NOT NULL,
+  computed_at TEXT NOT NULL
+);
 """
         )
