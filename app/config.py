@@ -15,6 +15,7 @@ class Settings:
     naver_client_id: str | None
     naver_client_secret: str | None
     tavily_api_key: str | None
+    openweather_api_key: str | None
     kis_app_key: str | None
     kis_app_secret: str | None
     kis_base_url: str
@@ -41,6 +42,7 @@ settings = Settings(
     naver_client_id=os.getenv("NAVER_CLIENT_ID"),
     naver_client_secret=os.getenv("NAVER_CLIENT_SECRET"),
     tavily_api_key=os.getenv("TAVILY_API_KEY"),
+    openweather_api_key=os.getenv("OPENWEATHER_API_KEY"),
     kis_app_key=os.getenv("KIS_APP_KEY"),
     kis_app_secret=os.getenv("KIS_APP_SECRET"),
     kis_base_url=os.getenv("KIS_BASE_URL", "https://openapi.koreainvestment.com:9443"),

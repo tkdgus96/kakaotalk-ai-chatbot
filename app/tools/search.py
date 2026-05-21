@@ -17,10 +17,12 @@ def _strip_html(text: str | None) -> str:
 
 @tool
 async def naver_search(query: str) -> str:
-    """한국 콘텐츠 검색 (네이버). 한국 회사·인물·제품·이벤트·맛집·시사·연예,
-    또는 '오늘 출시한 X', '방금 발표된 Y'처럼 한국 미디어에 막 보도된 정보에 대해 물어볼 때 사용하세요.
-    네이버는 한국 뉴스를 분 단위로 색인하므로 당일 정보도 잘 찾습니다.
-    영어 검색어/해외 콘텐츠는 web_search를 사용하세요."""
+    """한국 관련 검색은 일단 이거 우선 (네이버 API).
+    - 한국 날씨·미세먼지·기온 (서울/부산 등 한국 도시)
+    - 한국 회사·인물·제품·이벤트·맛집·연예·시사
+    - '오늘 출시한 X', '방금 발표된 Y' 같은 한국 미디어 최신 보도
+    네이버는 한국 뉴스를 분 단위로 색인하므로 캐시 지연이 적습니다.
+    영어 검색어나 해외 도시·기업·기술 등은 web_search를 쓰세요."""
     if not (settings.naver_client_id and settings.naver_client_secret):
         return "네이버 검색 키가 설정되어 있지 않습니다. (NAVER_CLIENT_ID/SECRET)"
 
