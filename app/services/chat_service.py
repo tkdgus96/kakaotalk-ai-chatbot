@@ -1,3 +1,4 @@
+import asyncio
 from datetime import datetime
 
 from langchain_community.chat_message_histories import SQLChatMessageHistory
@@ -5,6 +6,7 @@ from langchain_core.documents import Document
 from langchain_core.messages import AIMessage, HumanMessage, SystemMessage
 
 from app.boss.services.command_parser import parse_command
+from app.chat_log import add_chat_log
 from app.config import settings
 from app.dependencies import boss_service, llm, logger, message_buffers, vectorstore
 from app.graph import graph
@@ -69,6 +71,10 @@ async def handle_chat(data: KakaoMsg):
     if data.room_id not in settings.allowed_rooms:
         logger.info("New chatroom detected: '%s' (sender: %s)", data.room_id, data.sender)
         return {"answer": ""}
+
+    await asyncio.to_thread(
+        add_chat_log, data.room_id, data.sender, data.msg, datetime.now().isoformat()
+    )
 
     if not data.is_command:
         message_buffers[data.room_id].append(f"[{data.sender}]: {data.msg}")

@@ -4,12 +4,13 @@ from datetime import datetime
 from typing import Annotated, TypedDict
 
 from langchain_core.documents import Document
-from langchain_core.messages import AIMessage, HumanMessage, SystemMessage
+from langchain_core.messages import HumanMessage, SystemMessage
 from langgraph.graph import END, START, StateGraph
 from langgraph.graph.message import add_messages
 from langgraph.prebuilt import ToolNode
 
 from app.boss.utils.week import now_kst
+from app.chat_log import search_chat_log
 from app.config import settings
 from app.dependencies import fact_extractor_llm, llm, user_profile_store, vectorstore
 from app.persona import ensure_persona
@@ -75,69 +76,41 @@ def _last_human_text(messages: list) -> str:
     return last.content if hasattr(last, "content") else str(last)
 
 
-RERANK_PROMPT = """\
-유저 질문에 답하는 데 도움이 되는 문서를 골라.
-각 문서에 0-10 점수를 매겨. 10=강한 관련, 0=무관.
-JSON으로만 답해. 다른 텍스트 금지.
-
-질문: {query}
-
-문서들:
-{docs}
-
-응답 형식: {{"scores": [점수1, 점수2, ...]}}
-"""
-
-
-async def _rerank(query: str, docs: list, top_n: int) -> list:
-    """Rerank docs by relevance using a cheap LLM. Returns top_n docs."""
-    if len(docs) <= top_n:
-        return docs
-    doc_block = "\n".join(f"[{i}] {d.page_content[:300]}" for i, d in enumerate(docs))
-    prompt = RERANK_PROMPT.format(query=query, docs=doc_block)
+def _load_user_facts(room_id: int, sender: str, limit: int = 50) -> list[str]:
+    """Load all known facts for a user by key. Facts per user are few, so we
+    skip embedding-based ranking and just return them all."""
     try:
-        response = await fact_extractor_llm.ainvoke([HumanMessage(content=prompt)])
-        raw = response.content if isinstance(response.content, str) else str(response.content)
-        raw = raw.strip().lstrip("`").lstrip("json").strip()
-        scores = json.loads(raw).get("scores", [])
-        if len(scores) != len(docs):
-            return docs[:top_n]
-        ranked = sorted(zip(docs, scores), key=lambda p: p[1], reverse=True)
-        return [d for d, _ in ranked[:top_n]]
+        res = user_profile_store._collection.get(
+            where={"$and": [{"room_id": str(room_id)}, {"sender": sender}]},
+            limit=limit,
+        )
     except Exception:
-        return docs[:top_n]
+        return []
+    return res.get("documents", []) if isinstance(res, dict) else []
 
 
 async def retrieve(state: ChatState, config) -> dict:
     room_id, sender = _resolve(config)
     query = _last_human_text(state["messages"])
 
-    candidate_k = settings.rag_search_k * 3
-    relevant, summary_docs, user_fact_docs = await asyncio.gather(
+    summary_docs, fact_texts, fts_hits = await asyncio.gather(
         asyncio.to_thread(
             vectorstore.similarity_search,
             query,
-            k=candidate_k,
-            filter={"room_id": str(room_id)},
-        ),
-        asyncio.to_thread(
-            vectorstore.similarity_search,
-            query,
-            k=max(5, settings.rag_search_k // 2),
+            k=settings.rag_search_k,
             filter={"$and": [{"room_id": str(room_id)}, {"role": "context_summary"}]},
         ),
-        asyncio.to_thread(
-            user_profile_store.similarity_search,
-            query,
-            k=8,
-            filter={"$and": [{"room_id": str(room_id)}, {"sender": sender}]},
-        ),
+        asyncio.to_thread(_load_user_facts, room_id, sender),
+        asyncio.to_thread(search_chat_log, room_id, query, 5),
     )
-    relevant = await _rerank(query, relevant, top_n=settings.rag_search_k)
 
-    merged = summary_docs + relevant
-    context = "\n".join(d.page_content for d in merged) if merged else ""
-    user_facts = "\n".join(f"- {d.page_content}" for d in user_fact_docs) if user_fact_docs else ""
+    context_parts = []
+    if summary_docs:
+        context_parts.append("\n".join(d.page_content for d in summary_docs))
+    if fts_hits:
+        context_parts.append("키워드로 찾은 과거 발언:\n" + "\n".join(f"- {h}" for h in fts_hits))
+    context = "\n\n".join(context_parts)
+    user_facts = "\n".join(f"- {t}" for t in fact_texts) if fact_texts else ""
 
     try:
         persona = await ensure_persona(room_id)
@@ -186,38 +159,11 @@ async def store(state: ChatState) -> dict:
     sender = state.get("sender", settings.playground_sender)
     now = datetime.now().isoformat()
 
-    last_ai = None
     last_human = None
     for m in reversed(state["messages"]):
-        if last_ai is None and isinstance(m, AIMessage) and m.content:
-            last_ai = m
-        elif last_human is None and isinstance(m, HumanMessage) and m.content:
+        if isinstance(m, HumanMessage) and m.content:
             last_human = m
-        if last_ai and last_human:
             break
-
-    docs = []
-    if last_human:
-        docs.append(
-            Document(
-                page_content=f"[{sender}]: {last_human.content}",
-                metadata={
-                    "room_id": str(room_id),
-                    "role": "user",
-                    "sender": sender,
-                    "timestamp": now,
-                },
-            )
-        )
-    if last_ai:
-        docs.append(
-            Document(
-                page_content=f"[AI]: {last_ai.content}",
-                metadata={"room_id": str(room_id), "role": "assistant", "timestamp": now},
-            )
-        )
-    if docs:
-        await asyncio.to_thread(vectorstore.add_documents, docs)
 
     if last_human:
         await _extract_and_store_user_facts(last_human.content, room_id, sender, now)
