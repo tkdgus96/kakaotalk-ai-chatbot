@@ -2,10 +2,11 @@
 
 FastAPI-based KakaoTalk chatbot backend with:
 - OpenAI (LangChain) chat + tool calling
-- Conversation memory in PostgreSQL (`SQLChatMessageHistory`) for the KakaoTalk webhook
-- Long-term semantic memory in ChromaDB (RAG)
-- LangGraph-based agent graph for local dev chat UI testing
-- Built-in tools: Naver search (Korean), Tavily web search (global), MapleStory lookup, stock quotes
+- Recency memory in PostgreSQL/SQLite (`SQLChatMessageHistory`) for the KakaoTalk webhook
+- Long-term semantic memory in ChromaDB (conversation summaries + per-user facts)
+- Keyword/verbatim recall over raw turns via SQLite FTS5 (trigram) — raw turns are not embedded
+- LangGraph-based agent graph (shared by the webhook and the dev chat UI)
+- Built-in tools: Naver search (Korean), Tavily web search (global), OpenWeather, MapleStory lookup, stock quotes
 
 ## Features
 
@@ -30,14 +31,17 @@ app/
   api.py                # FastAPI routes
   config.py             # env-based settings
   dependencies.py       # shared singletons (llm, vectorstore, logger, buffers)
-  graph.py              # LangGraph StateGraph (used by `langgraph dev`)
+  graph.py              # LangGraph StateGraph: retrieve → chat ⇄ tools → store
+  chat_log.py           # SQLite FTS5 (trigram) keyword recall over raw turns
+  persona.py            # per-room persona evolution (weekly refresh)
   models.py             # request models
-  prompts.py            # system prompts
+  prompts.py            # system prompts (A/B tone variants)
   services/chat_service.py
   tools/
     maplestory.py       # lookup_maplestory_character (Nexon Open API)
     search.py           # naver_search (Naver) + web_search (Tavily)
     stock.py            # get_stock_quote (KIS / Yahoo / Naver / Tavily fallback)
+    weather.py          # get_weather (OpenWeather current + 24h forecast)
 langgraph.json          # LangGraph dev config (registers graph as "agent")
 main.py                 # FastAPI entrypoint (uvicorn main:app)
 ```
@@ -49,6 +53,7 @@ main.py                 # FastAPI entrypoint (uvicorn main:app)
 - OpenAI API key
 - (Recommended) Naver Developers credentials for Korean search (free 25k queries/day)
 - (Recommended) Tavily API key for global web search (free 1k queries/month)
+- (Optional) OpenWeather API key for the weather tool
 - (Optional) Nexon API key for MapleStory tool
 - (Optional) Korea Investment API credentials for KRX stock quotes
 
@@ -108,10 +113,10 @@ Open https://agentchat.vercel.app/ and configure:
 The graph mirrors the webhook pipeline:
 
 ```
-START → retrieve (RAG from Chroma)
+START → retrieve (Chroma summaries + FTS keyword recall + user facts + persona)
       → chat (LLM with system prompt + tools)
-      ↔ tools (web/stock/maplestory)
-      → store (persist user+AI turns to Chroma)
+      ↔ tools (search/weather/stock/maplestory)
+      → store (extract per-user facts; raw turns go to FTS, not embedded)
       → END
 ```
 
@@ -215,7 +220,8 @@ env ANONYMIZED_TELEMETRY=false CHROMA_TELEMETRY=false \
 
 - For the KakaoTalk webhook (`uvicorn main:app`), `DB_CONNECTION_STRING` must point to a reachable PostgreSQL instance.
 - For local dev (`langgraph dev`), SQLite is fine — set `DB_CONNECTION_STRING=sqlite:///./data/chat_history.db`.
-- Chroma persistent data is stored in `./chroma_db` (shared between webhook and dev UI for cross-session RAG memory).
+- Chroma persistent data is stored in `./chroma_db` (shared between webhook and dev UI for cross-session memory).
+- Memory model: recency via `SQLChatMessageHistory`; long-term semantic recall via Chroma `context_summary` docs; verbatim/keyword recall via SQLite FTS5 (`app/chat_log.py`, trigram); per-user facts loaded all-by-key from Chroma. Raw conversation turns are not embedded (avoids cost, noise, and stale-data recall).
 - Search tools: `naver_search` is preferred for Korean topics (faster indexing for same-day news); `web_search` (Tavily) is for global/English content. The system prompt routes the agent between them.
 - Stock tool uses multiple sources/fallbacks (KIS → Yahoo → Naver → Tavily on 429); for best KRX reliability, set KIS credentials.
 - Boss MVP schema is in `migrations/001_boss_mvp.sql` and auto-initialized on startup.

@@ -35,7 +35,7 @@ SYSTEM_PROMPT = """\
 4. 주식/증권:
    - 한국·미국 현재가/시세 → `get_stock_quote` 먼저
    - 이슈/뉴스/배경 → 한국 종목은 `naver_search`, 해외 종목은 `web_search` 병행
-5. 메이플스토리 캐릭터 정보 → `lookup_maplestory_character`
+5. 메이플스토리 캐릭터 정보 → `lookup_maplestory_character`. 메이플 본편 메소 시세("1억당 얼마", "메소 환율", "서버별 메소", "스카니아 메소") → `get_maple_meso_price` (server 인자: 서버명 또는 "전체"). 답변 끝에 "게임비트 기준" 한 줄 표시. stale=true면 "몇 시간 전 기준" 명시.
 6. 일반 상식/대화/이전 맥락 참고 → 도구 호출 없이 답변
 7. 도구가 있는 영역에서는 절대 "내가 직접 알려줄 수 없어", "실시간 정보는 모름" 같은 말을
    하지 마. 그런 답이 나올 상황이면 도구를 호출해.
