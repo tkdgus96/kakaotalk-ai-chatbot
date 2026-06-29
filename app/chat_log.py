@@ -19,6 +19,12 @@ from app.boss.db import get_conn
 _FTS_AVAILABLE = False
 
 
+def _ensure_fts_available() -> bool:
+    if not _FTS_AVAILABLE:
+        init_chat_log_schema()
+    return _FTS_AVAILABLE
+
+
 def init_chat_log_schema() -> None:
     """Create the FTS5 chat-log table. Sets a module flag so add/search become
     no-ops when FTS5 or the trigram tokenizer isn't supported."""
@@ -37,7 +43,7 @@ def init_chat_log_schema() -> None:
 
 def add_chat_log(room_id: int, sender: str, content: str, now_iso: str) -> None:
     """Index a single inbound user message for later keyword recall."""
-    if not _FTS_AVAILABLE:
+    if not _ensure_fts_available():
         return
     content = (content or "").strip()
     if not content:
@@ -74,7 +80,7 @@ def _build_match(query: str) -> str | None:
 def search_chat_log(room_id: int, query: str, limit: int = 5) -> list[str]:
     """Return up to `limit` past messages in the room matching the query's
     keywords, ranked by FTS relevance. Formatted as "[sender] content"."""
-    if not _FTS_AVAILABLE:
+    if not _ensure_fts_available():
         return []
     match = _build_match(query)
     if not match:
@@ -90,3 +96,33 @@ def search_chat_log(room_id: int, query: str, limit: int = 5) -> list[str]:
         return [f"[{r['sender']}] {r['content']}" for r in rows]
     except Exception:
         return []
+
+
+def get_chat_log_between(
+    room_id: int,
+    start_iso: str,
+    end_iso: str,
+    limit: int = 500,
+) -> list[str]:
+    """Return room messages in a deterministic created_at range."""
+    if not _ensure_fts_available():
+        return []
+    try:
+        with get_conn() as conn:
+            rows = conn.execute(
+                "SELECT content, sender, created_at FROM chat_log_fts "
+                "WHERE room_id = ? AND created_at >= ? AND created_at < ? "
+                "ORDER BY created_at ASC LIMIT ?",
+                (str(room_id), start_iso, end_iso, limit),
+            ).fetchall()
+        return [_format_row(r["created_at"], r["sender"], r["content"]) for r in rows]
+    except Exception:
+        return []
+
+
+def _format_row(created_at: str | None, sender: str, content: str) -> str:
+    if created_at:
+        match = re.match(r"\d{4}-\d{2}-\d{2}T(\d{2}:\d{2})", created_at)
+        if match:
+            return f"{match.group(1)} [{sender}] {content}"
+    return f"[{sender}] {content}"

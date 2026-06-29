@@ -1,6 +1,6 @@
 import asyncio
 import json
-from datetime import datetime
+from datetime import datetime, timedelta
 from typing import Annotated, TypedDict
 
 from langchain_core.documents import Document
@@ -10,7 +10,7 @@ from langgraph.graph.message import add_messages
 from langgraph.prebuilt import ToolNode
 
 from app.boss.utils.week import now_kst
-from app.chat_log import search_chat_log
+from app.chat_log import get_chat_log_between, search_chat_log
 from app.config import settings
 from app.dependencies import fact_extractor_llm, llm, user_profile_store, vectorstore
 from app.persona import ensure_persona
@@ -89,9 +89,73 @@ def _load_user_facts(room_id: int, sender: str, limit: int = 50) -> list[str]:
     return res.get("documents", []) if isinstance(res, dict) else []
 
 
+def _detect_date_recap_request(query: str) -> tuple[str, datetime, datetime] | None:
+    text = query.strip()
+    wants_recap = any(word in text for word in ("요약", "정리", "알려", "무슨 얘기", "뭔 얘기"))
+    mentions_chat = any(word in text for word in ("대화", "채팅", "채팅방", "방에서"))
+    if not (wants_recap and mentions_chat):
+        return None
+
+    today = now_kst().replace(hour=0, minute=0, second=0, microsecond=0)
+    if "어제" in text:
+        start = today - timedelta(days=1)
+        return "어제", start, today
+    if "오늘" in text:
+        return "오늘", today, today + timedelta(days=1)
+    return None
+
+
+def _build_date_recap_context(
+    label: str,
+    start: datetime,
+    end: datetime,
+    messages: list[str],
+) -> str:
+    date_label = start.strftime("%Y-%m-%d")
+    end_label = end.strftime("%Y-%m-%d")
+    if not messages:
+        return (
+            "사용자는 날짜별 채팅방 대화 요약을 요청했다.\n"
+            f"요청 날짜: {label} ({date_label} 00:00 KST부터 {end_label} 00:00 KST 전까지)\n"
+            "해당 날짜 범위의 원문 채팅 로그가 없다.\n"
+            "다른 날짜의 대화나 최근 대화로 추측하지 말고, 기록이 없다고 답하라."
+        )
+    joined = "\n".join(messages)
+    return (
+        "사용자는 날짜별 채팅방 대화 요약을 요청했다.\n"
+        f"요청 날짜: {label} ({date_label} 00:00 KST부터 {end_label} 00:00 KST 전까지)\n"
+        "아래 원문 채팅 로그만 근거로 요약하라. 다른 날짜의 대화, 최근 대화, 검색 결과, "
+        "장기 기억을 섞지 말라.\n\n"
+        "[해당 날짜 원문 채팅 로그]\n"
+        f"{joined}"
+    )
+
+
+def _chat_log_iso(dt: datetime) -> str:
+    return dt.replace(tzinfo=None).isoformat()
+
+
 async def retrieve(state: ChatState, config) -> dict:
     room_id, sender = _resolve(config)
     query = _last_human_text(state["messages"])
+
+    date_recap = _detect_date_recap_request(query)
+    if date_recap:
+        label, start, end = date_recap
+        dated_messages = await asyncio.to_thread(
+            get_chat_log_between,
+            room_id,
+            _chat_log_iso(start),
+            _chat_log_iso(end),
+            500,
+        )
+        return {
+            "retrieved_context": _build_date_recap_context(label, start, end, dated_messages),
+            "user_facts": "",
+            "room_persona": "",
+            "room_id": room_id,
+            "sender": sender,
+        }
 
     summary_docs, fact_texts, fts_hits = await asyncio.gather(
         asyncio.to_thread(
@@ -166,7 +230,8 @@ async def store(state: ChatState) -> dict:
             break
 
     if last_human:
-        await _extract_and_store_user_facts(last_human.content, room_id, sender, now)
+        content = last_human.content if isinstance(last_human.content, str) else str(last_human.content)
+        await _extract_and_store_user_facts(content, room_id, sender, now)
     return {}
 
 

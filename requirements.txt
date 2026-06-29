@@ -13,3 +13,6 @@ httpx
 tavily-python
 langgraph
 langgraph-cli[inmem]
+
+# Optional content retrieval layer. The app degrades gracefully if missing.
+crawl4ai

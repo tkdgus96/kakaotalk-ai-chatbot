@@ -48,6 +48,11 @@ class Settings:
     playground_sender: str
     prompt_variant_overrides: dict[int, str]
     default_prompt_variant: str
+    max_crawl_urls: int
+    crawl_timeout: float
+    enable_js: bool
+    cache_ttl: int
+    enable_crawl4ai: bool
 
 
 settings = Settings(
@@ -77,4 +82,9 @@ settings = Settings(
     playground_sender=os.getenv("PLAYGROUND_SENDER", "dev_user"),
     prompt_variant_overrides=_parse_variant_overrides(os.getenv("PROMPT_VARIANT_OVERRIDES", "")),
     default_prompt_variant=os.getenv("DEFAULT_PROMPT_VARIANT", "default"),
+    max_crawl_urls=int(os.getenv("MAX_CRAWL_URLS", "3")),
+    crawl_timeout=float(os.getenv("CRAWL_TIMEOUT", "10")),
+    enable_js=os.getenv("ENABLE_JS", "true").lower() in {"1", "true", "yes", "on"},
+    cache_ttl=int(os.getenv("CACHE_TTL", "1800")),
+    enable_crawl4ai=os.getenv("ENABLE_CRAWL4AI", "true").lower() in {"1", "true", "yes", "on"},
 )
