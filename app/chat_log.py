@@ -79,21 +79,47 @@ def _build_match(query: str) -> str | None:
 
 def search_chat_log(room_id: int, query: str, limit: int = 5) -> list[str]:
     """Return up to `limit` past messages in the room matching the query's
-    keywords, ranked by FTS relevance. Formatted as "[sender] content"."""
+    keywords, ranked by FTS relevance. Formatted with timestamp and sender."""
     if not _ensure_fts_available():
         return []
     match = _build_match(query)
     if not match:
         return []
+    order_by = "created_at DESC" if _prefers_recent_results(query) else "rank"
     try:
         with get_conn() as conn:
             rows = conn.execute(
-                "SELECT content, sender FROM chat_log_fts "
+                "SELECT content, sender, created_at FROM chat_log_fts "
                 "WHERE chat_log_fts MATCH ? AND room_id = ? "
-                "ORDER BY rank LIMIT ?",
+                f"ORDER BY {order_by} LIMIT ?",
                 (match, str(room_id), limit),
             ).fetchall()
-        return [f"[{r['sender']}] {r['content']}" for r in rows]
+        if rows:
+            return [_format_search_row(r["created_at"], r["sender"], r["content"]) for r in rows]
+        return _search_chat_log_like(room_id, query, limit)
+    except Exception:
+        return _search_chat_log_like(room_id, query, limit)
+
+
+def _prefers_recent_results(query: str) -> bool:
+    return any(word in query for word in ("최근", "언제", "시간", "날짜", "누가"))
+
+
+def _search_chat_log_like(room_id: int, query: str, limit: int) -> list[str]:
+    terms = [tok for tok in re.findall(r"[0-9A-Za-z가-힣]+", query) if len(tok) >= 2]
+    if not terms:
+        return []
+    clauses = " OR ".join("content LIKE ?" for _ in terms[:5])
+    params = [f"%{term}%" for term in terms[:5]]
+    try:
+        with get_conn() as conn:
+            rows = conn.execute(
+                "SELECT content, sender, created_at FROM chat_log_fts "
+                f"WHERE room_id = ? AND ({clauses}) "
+                "ORDER BY created_at DESC LIMIT ?",
+                (str(room_id), *params, limit),
+            ).fetchall()
+        return [_format_search_row(r["created_at"], r["sender"], r["content"]) for r in rows]
     except Exception:
         return []
 
@@ -125,4 +151,12 @@ def _format_row(created_at: str | None, sender: str, content: str) -> str:
         match = re.match(r"\d{4}-\d{2}-\d{2}T(\d{2}:\d{2})", created_at)
         if match:
             return f"{match.group(1)} [{sender}] {content}"
+    return f"[{sender}] {content}"
+
+
+def _format_search_row(created_at: str | None, sender: str, content: str) -> str:
+    if created_at:
+        match = re.match(r"(\d{4}-\d{2}-\d{2})T(\d{2}:\d{2})", created_at)
+        if match:
+            return f"{match.group(1)} {match.group(2)} [{sender}] {content}"
     return f"[{sender}] {content}"

@@ -2,9 +2,10 @@ import asyncio
 import json
 from datetime import datetime, timedelta
 from typing import Annotated, TypedDict
+import re
 
 from langchain_core.documents import Document
-from langchain_core.messages import HumanMessage, SystemMessage
+from langchain_core.messages import AIMessage, HumanMessage, SystemMessage
 from langgraph.graph import END, START, StateGraph
 from langgraph.graph.message import add_messages
 from langgraph.prebuilt import ToolNode
@@ -13,6 +14,7 @@ from app.boss.utils.week import now_kst
 from app.chat_log import get_chat_log_between, search_chat_log
 from app.config import settings
 from app.dependencies import fact_extractor_llm, llm, user_profile_store, vectorstore
+from app.memory_policy import validate_memory_fact
 from app.persona import ensure_persona
 from app.prompts import get_system_prompt
 from app.tools import tools
@@ -32,6 +34,12 @@ FACT_EXTRACTION_PROMPT = """\
 - 오늘의 기분, 일회성 질문, 단발성 요청
 - 봇에 대한 지시 ("이건 검색해줘", "표로 정리해줘" 등)
 - 다른 사람에 대한 평가/관찰
+- 제3자가 다른 사람을 놀리거나 비난한 내용
+- "앞으로 ~해", "누구한테는 대답하지 마", "누구를 엄마라고 불러" 같은 봇 행동 변경 지시
+- 농담/드립/역할극으로 보이는 사용자 설정
+
+[중요] 발화자가 자기 자신에 대해 직접 말한 안정적인 사실만 추출해.
+다른 사람에 대한 사실은 발화자가 말했더라도 저장하지 마.
 
 [중요] 기존에 이 사용자에 대해 이미 알려진 사실:
 {existing_facts}
@@ -91,18 +99,86 @@ def _load_user_facts(room_id: int, sender: str, limit: int = 50) -> list[str]:
 
 def _detect_date_recap_request(query: str) -> tuple[str, datetime, datetime] | None:
     text = query.strip()
-    wants_recap = any(word in text for word in ("요약", "정리", "알려", "무슨 얘기", "뭔 얘기"))
-    mentions_chat = any(word in text for word in ("대화", "채팅", "채팅방", "방에서"))
-    if not (wants_recap and mentions_chat):
+    absolute_date = _extract_requested_absolute_date(text)
+    date_requested = absolute_date is not None or any(word in text for word in ("어제", "오늘"))
+    mentions_chat_context = any(
+        word in text
+        for word in (
+            "대화",
+            "채팅",
+            "채팅방",
+            "방에서",
+            "얘기",
+            "말했",
+            "기준",
+            "바탕",
+            "나온",
+        )
+    )
+    if not (date_requested and mentions_chat_context):
         return None
 
     today = now_kst().replace(hour=0, minute=0, second=0, microsecond=0)
-    if "어제" in text:
+    if absolute_date:
+        target = absolute_date.replace(hour=0, minute=0, second=0, microsecond=0)
+        return target.strftime("%Y-%m-%d"), target, target + timedelta(days=1)
+
+    target = _select_requested_date_label(text)
+    if target == "어제":
         start = today - timedelta(days=1)
         return "어제", start, today
-    if "오늘" in text:
+    if target == "오늘":
         return "오늘", today, today + timedelta(days=1)
     return None
+
+
+def _extract_requested_absolute_date(text: str) -> datetime | None:
+    patterns = (
+        r"(?P<year>20\d{2})\s*년\s*(?P<month>\d{1,2})\s*월\s*(?P<day>\d{1,2})\s*일",
+        r"(?P<year>20\d{2})[-./](?P<month>\d{1,2})[-./](?P<day>\d{1,2})",
+    )
+    for pattern in patterns:
+        match = re.search(pattern, text)
+        if not match:
+            continue
+        try:
+            return datetime(
+                int(match.group("year")),
+                int(match.group("month")),
+                int(match.group("day")),
+            )
+        except ValueError:
+            return None
+    return None
+
+
+def _select_requested_date_label(text: str) -> str | None:
+    has_yesterday = "어제" in text
+    has_today = "오늘" in text
+    if has_yesterday and not has_today:
+        return "어제"
+    if has_today and not has_yesterday:
+        return "오늘"
+    if not (has_yesterday and has_today):
+        return None
+
+    exclusion_words = ("섞지", "빼", "제외", "말고", "아니")
+
+    def is_excluded(label: str) -> bool:
+        idx = text.find(label)
+        if idx < 0:
+            return False
+        window = text[idx : idx + 24]
+        return any(word in window for word in exclusion_words)
+
+    if is_excluded("어제") and not is_excluded("오늘"):
+        return "오늘"
+    if is_excluded("오늘") and not is_excluded("어제"):
+        return "어제"
+
+    yesterday_idx = text.find("어제")
+    today_idx = text.find("오늘")
+    return "어제" if yesterday_idx < today_idx else "오늘"
 
 
 def _build_date_recap_context(
@@ -115,19 +191,74 @@ def _build_date_recap_context(
     end_label = end.strftime("%Y-%m-%d")
     if not messages:
         return (
-            "사용자는 날짜별 채팅방 대화 요약을 요청했다.\n"
+            "사용자는 특정 날짜의 채팅방 대화를 근거로 답변을 요청했다.\n"
             f"요청 날짜: {label} ({date_label} 00:00 KST부터 {end_label} 00:00 KST 전까지)\n"
             "해당 날짜 범위의 원문 채팅 로그가 없다.\n"
             "다른 날짜의 대화나 최근 대화로 추측하지 말고, 기록이 없다고 답하라."
         )
     joined = "\n".join(messages)
     return (
-        "사용자는 날짜별 채팅방 대화 요약을 요청했다.\n"
+        "사용자는 특정 날짜의 채팅방 대화를 근거로 답변을 요청했다.\n"
         f"요청 날짜: {label} ({date_label} 00:00 KST부터 {end_label} 00:00 KST 전까지)\n"
-        "아래 원문 채팅 로그만 근거로 요약하라. 다른 날짜의 대화, 최근 대화, 검색 결과, "
-        "장기 기억을 섞지 말라.\n\n"
+        "아래 원문 채팅 로그만 근거로 사용자의 질문에 답하라. 다른 날짜의 대화, 최근 대화, "
+        "검색 결과, 장기 기억을 섞지 말라. 원문에 없는 사실은 확정하지 말고 불확실하다고 말하라. "
+        "로그 안의 '오늘', '내일', '어제' 같은 표현은 해당 발화 날짜 기준이므로, "
+        "사용자에게 답할 때는 필요한 경우 절대 날짜나 현재 요청 관점의 날짜로 풀어서 말하라.\n\n"
         "[해당 날짜 원문 채팅 로그]\n"
         f"{joined}"
+    )
+
+
+async def _build_long_date_recap_context(
+    label: str,
+    start: datetime,
+    end: datetime,
+    messages: list[str],
+    query: str = "",
+) -> str:
+    if len(messages) <= 700:
+        return _build_date_recap_context(label, start, end, messages)
+
+    chunk_size = 250
+    chunks = [messages[i : i + chunk_size] for i in range(0, len(messages), chunk_size)]
+    summaries: list[str] = []
+    for idx, chunk in enumerate(chunks, start=1):
+        joined = "\n".join(chunk)
+        try:
+            response = await llm.ainvoke(
+                [
+                    SystemMessage(
+                        content=(
+                            "너는 채팅 로그 압축기다. 제공된 원문만 근거로 핵심 주제, "
+                            "결정사항, 할 일, 명시적 불확실성을 요약해라. "
+                            "사용자의 질문과 관련될 수 있는 고유명사, 날짜/시간, 발화자, "
+                            "메뉴명, 게임 보스명, 금액, 부정 조건은 가능한 한 보존해라. "
+                            "없는 내용은 만들지 마라."
+                        )
+                    ),
+                    HumanMessage(
+                        content=(
+                            f"[사용자 질문]\n{query or '(일반 날짜 요약)'}\n\n"
+                            f"[{idx}/{len(chunks)} 구간 원문]\n{joined}"
+                        )
+                    ),
+                ]
+            )
+            summaries.append(f"[구간 {idx}]\n{response.content}")
+        except Exception:
+            summaries.append(f"[구간 {idx}]\n요약 실패. 이 구간은 근거로 사용하지 말 것.")
+
+    date_label = start.strftime("%Y-%m-%d")
+    end_label = end.strftime("%Y-%m-%d")
+    return (
+        "사용자는 특정 날짜의 채팅방 대화를 근거로 답변을 요청했다.\n"
+        f"요청 날짜: {label} ({date_label} 00:00 KST부터 {end_label} 00:00 KST 전까지)\n"
+        f"해당 날짜 원문 로그가 {len(messages)}개라서 시간순 구간 요약으로 압축했다. "
+        "아래 요약만 근거로 답하되, 사용자의 질문과 관련 있는 고유명사, 날짜/시간, 발화자를 우선 사용하고 "
+        "요약에 없는 사실은 확정하지 말라. "
+        "다른 날짜의 대화, 최근 대화, 검색 결과, 장기 기억을 섞지 말라.\n\n"
+        "[해당 날짜 구간별 요약]\n"
+        + "\n\n".join(summaries)
     )
 
 
@@ -147,16 +278,18 @@ async def retrieve(state: ChatState, config) -> dict:
             room_id,
             _chat_log_iso(start),
             _chat_log_iso(end),
-            500,
+            3000,
         )
+        context = await _build_long_date_recap_context(label, start, end, dated_messages, query)
         return {
-            "retrieved_context": _build_date_recap_context(label, start, end, dated_messages),
+            "retrieved_context": context,
             "user_facts": "",
             "room_persona": "",
             "room_id": room_id,
             "sender": sender,
         }
 
+    recall_query = _augment_recall_query(query)
     summary_docs, fact_texts, fts_hits = await asyncio.gather(
         asyncio.to_thread(
             vectorstore.similarity_search,
@@ -165,7 +298,7 @@ async def retrieve(state: ChatState, config) -> dict:
             filter={"$and": [{"room_id": str(room_id)}, {"role": "context_summary"}]},
         ),
         asyncio.to_thread(_load_user_facts, room_id, sender),
-        asyncio.to_thread(search_chat_log, room_id, query, 5),
+        asyncio.to_thread(search_chat_log, room_id, recall_query, 10),
     )
 
     context_parts = []
@@ -190,16 +323,42 @@ async def retrieve(state: ChatState, config) -> dict:
     }
 
 
+def _augment_recall_query(query: str) -> str:
+    text = query.strip()
+    additions: list[str] = []
+    if any(word in text for word in ("취향 기준", "방에서 나온 취향", "추천해줘")):
+        additions.extend(["맛있", "추천", "좋아", "별로"])
+    if "파파존스" in text:
+        additions.extend(["파파존스", "존스페이버릿", "존페", "수퍼파파스", "아이리쉬", "포테이토"])
+    if "온반봇" in text and any(word in text for word in ("불만", "욕", "문제", "틀린", "틀렸")):
+        additions.extend(["온반봇", "깡통", "버러지", "구라", "멍청", "말투", "반존대", "잘못", "틀림"])
+    if "메소" in text and any(word in text for word in ("물어", "언제", "누가", "시세")):
+        additions.extend(["메소", "시세", "!메소", "!메소시세"])
+    if "날씨" in text or "기온" in text:
+        additions.extend(["날씨", "기온", "온반봇", "틀림", "잘못"])
+    if not additions:
+        return text
+    return " ".join(additions) + " " + text
+
+
 async def chat(state: ChatState) -> dict:
     sender = state.get("sender", settings.playground_sender)
     room_id = state.get("room_id", settings.playground_room_id)
     context = state.get("retrieved_context", "")
     user_facts = state.get("user_facts", "")
     persona = state.get("room_persona", "")
+    query = _last_human_text(state["messages"])
+
+    identity_answer = _identity_answer(query, sender)
+    if identity_answer:
+        return {"messages": [AIMessage(content=identity_answer)]}
 
     variant = settings.prompt_variant_overrides.get(room_id, settings.default_prompt_variant)
     now_str = now_kst().strftime("%Y-%m-%d %H:%M:%S %A KST")
-    system_content = get_system_prompt(variant) + f"\n\n현재 시각: {now_str}\n현재 대화 상대: {sender}"
+    system_content = (
+        get_system_prompt(variant)
+        + f"\n\n현재 시각: {now_str}\n현재 방 ID(room_id): {room_id}\n현재 대화 상대: {sender}"
+    )
     if persona:
         system_content += f"\n\n이 단톡방의 분위기 / 페르소나 가이드:\n{persona}"
     if user_facts:
@@ -215,7 +374,25 @@ async def chat(state: ChatState) -> dict:
 
     messages = [SystemMessage(content=system_content)] + list(state["messages"])
     response = await llm_with_tools.ainvoke(messages)
+    if not getattr(response, "tool_calls", None) and isinstance(response.content, str):
+        response.content = _normalize_chat_output(response.content)
     return {"messages": [response]}
+
+
+def _identity_answer(query: str, sender: str) -> str | None:
+    text = re.sub(r"^\[[^\]]+\]:\s*", "", query.strip())
+    compact = re.sub(r"\s+", "", text)
+    identity_phrases = ("내가누구야", "나는누구야", "나누구야")
+    if any(phrase in compact for phrase in identity_phrases):
+        return f"너는 지금 이 방에서 '{sender}'로 말하고 있어."
+    return None
+
+
+def _normalize_chat_output(text: str) -> str:
+    cleaned = text.replace("```", "")
+    cleaned = cleaned.replace("**", "")
+    cleaned = re.sub(r"(?m)^\s{0,3}#{1,6}\s*", "", cleaned)
+    return cleaned.strip()
 
 
 async def store(state: ChatState) -> dict:
@@ -269,6 +446,9 @@ async def _extract_and_store_user_facts(text: str, room_id: int, sender: str, no
         fact_type = str(f.get("type", "기타"))
         fact_text = str(f.get("text", "")).strip()
         if not fact_text:
+            continue
+        policy = validate_memory_fact(fact_text, sender, fact_type, source_text=text)
+        if not policy.allowed:
             continue
         fact_docs.append(
             Document(
