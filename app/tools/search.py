@@ -1,18 +1,12 @@
-import re
-
-import httpx
 from langchain_core.tools import tool
-from tavily import AsyncTavilyClient
 
 from app.config import settings
+from app.services.crawl_service import CrawlDocument, CrawlService
+from app.services.search_service import SearchResult, SearchService
 
-_tavily: AsyncTavilyClient | None = (
-    AsyncTavilyClient(api_key=settings.tavily_api_key) if settings.tavily_api_key else None
-)
-
-
-def _strip_html(text: str | None) -> str:
-    return re.sub(r"<[^>]+>", "", text or "")
+search_service = SearchService(settings)
+crawl_service = CrawlService(settings)
+_tavily = search_service._tavily
 
 
 @tool
@@ -26,48 +20,15 @@ async def naver_search(query: str) -> str:
     if not (settings.naver_client_id and settings.naver_client_secret):
         return "네이버 검색 키가 설정되어 있지 않습니다. (NAVER_CLIENT_ID/SECRET)"
 
-    headers = {
-        "X-Naver-Client-Id": settings.naver_client_id,
-        "X-Naver-Client-Secret": settings.naver_client_secret,
-    }
     try:
-        async with httpx.AsyncClient(timeout=10.0) as client:
-            news_resp, web_resp = await _gather_naver(client, headers, query)
+        results = await search_service.search_naver(query)
+        docs = await crawl_service.crawl_many([result.url for result in results[: settings.max_crawl_urls]])
     except Exception as exc:
         return f"네이버 검색 중 오류: {exc}"
 
-    blocks: list[str] = []
-    for src, resp in (("뉴스", news_resp), ("웹", web_resp)):
-        if resp is None or resp.status_code != 200:
-            continue
-        for it in resp.json().get("items", [])[:5]:
-            title = _strip_html(it.get("title"))
-            desc = _strip_html(it.get("description"))
-            link = it.get("originallink") or it.get("link") or ""
-            pub = it.get("pubDate", "")
-            head = f"[{src}] 제목: {title}"
-            if pub:
-                head += f"\n날짜: {pub}"
-            blocks.append(f"{head}\nURL: {link}\n내용: {desc}")
-    if not blocks:
+    if not results:
         return "네이버 검색 결과가 없습니다."
-    return "\n\n---\n\n".join(blocks)
-
-
-async def _gather_naver(client: httpx.AsyncClient, headers: dict, query: str):
-    import asyncio
-
-    news = client.get(
-        "https://openapi.naver.com/v1/search/news.json",
-        params={"query": query, "display": 5, "sort": "date"},
-        headers=headers,
-    )
-    web = client.get(
-        "https://openapi.naver.com/v1/search/webkr.json",
-        params={"query": query, "display": 5},
-        headers=headers,
-    )
-    return await asyncio.gather(news, web, return_exceptions=False)
+    return _format_search_with_crawl(results, docs)
 
 
 @tool
@@ -76,23 +37,33 @@ async def web_search(query: str) -> str:
     글로벌 시사·환율·코인·해외 스포츠 등에 사용하세요.
     네이버 검색에서 정보가 부족한 한국 주제도 보조로 사용 가능합니다.
     한국 콘텐츠는 가능하면 naver_search를 우선 호출하세요."""
-    if _tavily is None:
+    if not search_service.is_web_available():
         return "Tavily API 키가 설정되어 있지 않습니다. (TAVILY_API_KEY)"
     try:
-        result = await _tavily.search(
-            query=query,
-            search_depth="advanced",
-            max_results=5,
-            include_answer=False,
-        )
+        results = await search_service.search_web(query)
+        docs = await crawl_service.crawl_many([result.url for result in results[: settings.max_crawl_urls]])
     except Exception as exc:
         return f"Tavily 검색 중 오류: {exc}"
 
-    items = result.get("results", [])
-    if not items:
+    if not results:
         return "검색 결과가 없습니다."
-    blocks = []
-    for it in items:
-        content = (it.get("content") or "")[:1200]
-        blocks.append(f"제목: {it.get('title')}\nURL: {it.get('url')}\n내용: {content}")
+    return _format_search_with_crawl(results, docs)
+
+
+def _format_search_with_crawl(results: list[SearchResult], docs: list[CrawlDocument]) -> str:
+    docs_by_url = {doc.url: doc for doc in docs}
+    blocks: list[str] = []
+    for result in results:
+        doc = docs_by_url.get(result.url)
+        head = f"[{result.source_type}] 제목: {result.title}\nURL: {result.url}"
+        if result.published_at:
+            head += f"\n날짜: {result.published_at}"
+
+        if doc and doc.success and doc.markdown:
+            content = doc.markdown[:3000]
+            cache_note = "true" if doc.from_cache else "false"
+            blocks.append(f"{head}\n크롤 성공: true\n캐시 사용: {cache_note}\n본문 Markdown:\n{content}")
+        else:
+            error = doc.error if doc else "크롤 대상 아님"
+            blocks.append(f"{head}\n크롤 성공: false\n크롤 오류: {error}\n검색 요약: {result.snippet}")
     return "\n\n---\n\n".join(blocks)

@@ -79,6 +79,7 @@ All config is env-based via `app/config.py` (`.env`; see `.env.example`). Notabl
 
 ## Notes / gotchas
 
+- GitHub account discipline: commits and pushes for this repository must use the personal GitHub account `tkdgus96`. Do not use the company account `tkdgus9610`. Before committing or pushing, verify `git config user.name`, `git config user.email`, and `git remote -v` point to `tkdgus96`.
 - Chroma is **embedded** (`./chroma_db`); the `chromadb` service in `docker-compose.yml` is unused — the app never connects to it.
 - `docker-compose.yml` Postgres credentials are hardcoded dev defaults — do not reuse in production.
 - Chroma calls on async paths must be wrapped in `asyncio.to_thread` (see `app/graph.py` / `app/chat_log.py`).
