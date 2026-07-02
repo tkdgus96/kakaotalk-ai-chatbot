@@ -1,6 +1,6 @@
 import unittest
 
-from app.tools.stock import get_krx_code, is_symbol_like, normalize_stock_candidates
+from app.tools.stock import _extract_first_ticker, _extract_tickers, get_krx_code, is_symbol_like, normalize_stock_candidates
 
 
 class StockHelperTests(unittest.TestCase):
@@ -20,6 +20,15 @@ class StockHelperTests(unittest.TestCase):
     def test_normalize_stock_candidates_natural_language_phrase(self):
         candidates = normalize_stock_candidates("meta's stock price")
         self.assertIn("META", candidates)
+
+    def test_extract_first_ticker_prefers_krx_and_class_symbols(self):
+        self.assertEqual(_extract_first_ticker("005380.KS"), "005380.KS")
+        self.assertEqual(_extract_first_ticker("BRK.B"), "BRK-B")
+
+    def test_extract_tickers_from_json_candidate_list(self):
+        raw = '{"tickers":["329180.KS","267250.KS","BRK.B"]}'
+
+        self.assertEqual(_extract_tickers(raw), ["329180.KS", "267250.KS", "BRK-B"])
 
     def test_is_symbol_like(self):
         self.assertTrue(is_symbol_like("PLTR"))
