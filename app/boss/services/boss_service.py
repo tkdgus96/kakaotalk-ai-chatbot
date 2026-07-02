@@ -19,6 +19,12 @@ class BossService:
             return f"[이미 등록됨]\n{boss_name}는 이미 매주 보스로 등록되어 있습니다."
         return f"[보스 등록 완료]\n{boss_name}를 매주 진행 보스로 등록했습니다.\n목요일마다 이번 주 보스 시간 설정을 요청합니다."
 
+    def disable_weekly_boss(self, room_id: int, boss_name: str) -> str:
+        ok = self.repo.disable_weekly_boss(room_id, boss_name, now_kst().isoformat())
+        if not ok:
+            return f"[해제 실패]\n{boss_name}는 매주 보스로 등록되어 있지 않습니다."
+        return f"[보스 해제 완료]\n{boss_name}를 매주 진행 보스에서 해제했습니다."
+
     def touch_room(self, room_id: int, room_name: str) -> None:
         self.repo.upsert_room(room_id, room_name, now_kst().isoformat())
 

@@ -29,10 +29,16 @@ class BossRepository:
     def register_weekly_boss(self, room_id: int, boss_name: str, now_iso: str) -> bool:
         with get_conn() as conn:
             row = conn.execute(
-                "SELECT id FROM weekly_boss WHERE room_id=? AND boss_name=?",
+                "SELECT id, enabled FROM weekly_boss WHERE room_id=? AND boss_name=?",
                 (room_id, boss_name),
             ).fetchone()
             if row:
+                if not row["enabled"]:
+                    conn.execute(
+                        "UPDATE weekly_boss SET enabled=1, updated_at=? WHERE id=?",
+                        (now_iso, row["id"]),
+                    )
+                    return True
                 return False
             conn.execute(
                 "INSERT INTO weekly_boss (room_id, boss_name, enabled, created_at, updated_at) VALUES (?, ?, 1, ?, ?)",
@@ -71,6 +77,14 @@ class BossRepository:
                 "SELECT * FROM weekly_boss WHERE room_id=? AND boss_name=? AND enabled=1",
                 (room_id, boss_name),
             ).fetchone()
+
+    def disable_weekly_boss(self, room_id: int, boss_name: str, now_iso: str) -> bool:
+        with get_conn() as conn:
+            cur = conn.execute(
+                "UPDATE weekly_boss SET enabled=0, updated_at=? WHERE room_id=? AND boss_name=? AND enabled=1",
+                (now_iso, room_id, boss_name),
+            )
+            return cur.rowcount > 0
 
     def find_schedule(self, room_id: int, boss_name: str, week_start_date: str):
         with get_conn() as conn:

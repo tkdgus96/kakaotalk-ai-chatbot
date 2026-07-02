@@ -127,23 +127,26 @@ def handle_boss_command(room_id: int, sender: str, name: str, args: list[str]) -
             "1) 주간 보스 등록\n"
             "!보스매주 [bossName]\n"
             "예) !보스매주 검마\n\n"
-            "2) 이번 주 보스 시간 등록/수정\n"
+            "2) 주간 보스 해제\n"
+            "!보스해제 [bossName]\n"
+            "예) !보스해제 검마\n\n"
+            "3) 이번 주 보스 시간 등록/수정\n"
             "!보스시간 [bossName] [요일] [HH:mm]\n"
             "예) !보스시간 검마 토요일 22:00\n\n"
-            "3) 이번 주 보스 일정 조회\n"
+            "4) 이번 주 보스 일정 조회\n"
             "!이번주보스\n\n"
-            "4) 드랍 등록\n"
+            "5) 드랍 등록\n"
             "!드랍 [itemName] [price]\n"
             "!드랍 [bossName] [itemName] [price]\n"
             "예) !드랍 루컨마 84억\n"
             "예) !드랍 검마 몽벨 220억\n\n"
-            "5) 정산\n"
+            "6) 정산\n"
             "!정산 [bossName] [memberCount]\n"
             "예) !정산 검마 4\n\n"
-            "6) 정산 완료 처리\n"
+            "7) 정산 완료 처리\n"
             "!정산완료 [settlementCode]\n"
             "예) !정산완료 B105\n\n"
-            "7) 최근 정산 목록\n"
+            "8) 최근 정산 목록\n"
             "!정산목록"
         )
 
@@ -151,6 +154,11 @@ def handle_boss_command(room_id: int, sender: str, name: str, args: list[str]) -
         if len(args) != 1:
             return "사용법: !보스매주 [bossName]"
         return boss_service.register_weekly_boss(room_id, args[0])
+
+    if name == "!보스해제":
+        if len(args) != 1:
+            return "사용법: !보스해제 [bossName]"
+        return boss_service.disable_weekly_boss(room_id, args[0])
 
     if name == "!보스시간":
         if len(args) != 3:
