@@ -82,18 +82,8 @@ def search_chat_log(room_id: int, query: str, limit: int = 5) -> list[str]:
     keywords, ranked by FTS relevance. Formatted with timestamp and sender."""
     if not _ensure_fts_available():
         return []
-    match = _build_match(query)
-    if not match:
-        return []
-    order_by = "created_at DESC" if _prefers_recent_results(query) else "rank"
     try:
-        with get_conn() as conn:
-            rows = conn.execute(
-                "SELECT content, sender, created_at FROM chat_log_fts "
-                "WHERE chat_log_fts MATCH ? AND room_id = ? "
-                f"ORDER BY {order_by} LIMIT ?",
-                (match, str(room_id), limit),
-            ).fetchall()
+        rows = _search_chat_log_rows(room_id, query, limit)
         if rows:
             return [_format_search_row(r["created_at"], r["sender"], r["content"]) for r in rows]
         return _search_chat_log_like(room_id, query, limit)
@@ -101,8 +91,212 @@ def search_chat_log(room_id: int, query: str, limit: int = 5) -> list[str]:
         return _search_chat_log_like(room_id, query, limit)
 
 
+def search_chat_log_with_windows(
+    room_id: int,
+    query: str,
+    limit: int = 5,
+    before: int = 4,
+    after: int = 4,
+) -> list[str]:
+    """Return keyword hits with nearby messages for context-sensitive recall."""
+    if not _ensure_fts_available():
+        return []
+    hits = _search_chat_log_rows(room_id, query, limit)
+    windows: list[str] = []
+    seen: set[int] = set()
+    for hit in hits:
+        rowid = int(hit["rowid"])
+        if rowid in seen:
+            continue
+        seen.add(rowid)
+        rows = get_chat_log_around(room_id, rowid, before=before, after=after)
+        if not rows:
+            continue
+        windows.append(
+            "[검색 hit 주변 대화]\n"
+            + "\n".join(rows)
+        )
+    return windows
+
+
+def search_chat_log_evidence(
+    room_id: int,
+    query: str,
+    limit: int = 20,
+    include_bots: bool = False,
+    include_commands: bool = False,
+) -> list[str]:
+    """Return user-authored evidence lines for room-log questions.
+
+    This is intentionally broader than FTS rank-only search: room questions
+    often use wording that differs from the actual game/app-generated phrase
+    in the log, so we combine FTS hits with LIKE hits and then filter commands
+    and previous bot answers out of the evidence set.
+    """
+    if not _ensure_fts_available():
+        return []
+
+    rows = []
+    rows.extend(_search_chat_log_rows(room_id, query, limit * 2))
+    rows.extend(_search_chat_log_like_rows(room_id, query, limit * 3, include_term_prefixes=True))
+
+    deduped = []
+    seen: set[int] = set()
+    for row in rows:
+        rowid = int(row["rowid"])
+        if rowid in seen:
+            continue
+        seen.add(rowid)
+        sender = str(row["sender"] or "")
+        content = str(row["content"] or "").strip()
+        if not include_bots and sender == "온반봇":
+            continue
+        if not include_commands and content.startswith("!"):
+            continue
+        if not content:
+            continue
+        deduped.append(row)
+    deduped.sort(key=lambda row: str(row["created_at"] or ""), reverse=True)
+    deduped = deduped[:limit]
+    return [_format_search_row(r["created_at"], r["sender"], r["content"]) for r in deduped]
+
+
+def _search_chat_log_rows(room_id: int, query: str, limit: int) -> list:
+    match = _build_match(query)
+    prefers_recent = _prefers_recent_results(query)
+    rows = []
+    if not match:
+        return _search_chat_log_like_rows(room_id, query, limit, include_term_prefixes=prefers_recent)
+    order_by = "created_at DESC" if prefers_recent else "rank"
+    try:
+        with get_conn() as conn:
+            rows = conn.execute(
+                "SELECT rowid, content, sender, created_at FROM chat_log_fts "
+                "WHERE chat_log_fts MATCH ? AND room_id = ? "
+                f"ORDER BY {order_by} LIMIT ?",
+                (match, str(room_id), limit),
+            ).fetchall()
+    except Exception:
+        rows = []
+
+    if prefers_recent:
+        rows = list(rows) + _search_chat_log_like_rows(
+            room_id,
+            query,
+            limit * 2,
+            include_term_prefixes=True,
+        )
+        deduped = []
+        seen: set[int] = set()
+        for row in rows:
+            rowid = int(row["rowid"])
+            if rowid in seen:
+                continue
+            seen.add(rowid)
+            deduped.append(row)
+        deduped.sort(key=lambda row: str(row["created_at"] or ""), reverse=True)
+        return deduped[:limit]
+
+    if rows:
+        return rows
+    return _search_chat_log_like_rows(room_id, query, limit)
+
+
+def _search_chat_log_like_rows(
+    room_id: int,
+    query: str,
+    limit: int,
+    include_term_prefixes: bool = False,
+) -> list:
+    terms = _like_terms(query, include_term_prefixes=include_term_prefixes)
+    if not terms:
+        return []
+    clauses = " OR ".join("content LIKE ?" for _ in terms[:8])
+    params = [f"%{term}%" for term in terms[:8]]
+    try:
+        with get_conn() as conn:
+            return conn.execute(
+                "SELECT rowid, content, sender, created_at FROM chat_log_fts "
+                f"WHERE room_id = ? AND ({clauses}) "
+                "ORDER BY created_at DESC LIMIT ?",
+                (str(room_id), *params, limit),
+            ).fetchall()
+    except Exception:
+        return []
+
+
+def _like_terms(query: str, include_term_prefixes: bool = False) -> list[str]:
+    stopwords = {
+        "이",
+        "방",
+        "이방",
+        "에서",
+        "대해",
+        "대화",
+        "채팅",
+        "채팅방",
+        "기록",
+        "정리",
+        "정리해줘",
+        "알려줘",
+        "요약",
+        "요약해줘",
+        "누가",
+        "언제",
+        "인별",
+        "사람별",
+        "놀이",
+    }
+    terms: list[str] = []
+    seen: set[str] = set()
+    for tok in re.findall(r"[0-9A-Za-z가-힣]+", query):
+        candidates = [tok]
+        if include_term_prefixes and re.fullmatch(r"[가-힣]{4,}", tok):
+            candidates.append(tok[:2])
+        for candidate in candidates:
+            if len(candidate) < 2 or candidate in seen or candidate in stopwords:
+                continue
+            seen.add(candidate)
+            terms.append(candidate)
+    return terms
+
+
+
+def get_chat_log_around(room_id: int, rowid: int, before: int = 4, after: int = 4) -> list[str]:
+    if not _ensure_fts_available():
+        return []
+    try:
+        with get_conn() as conn:
+            target = conn.execute(
+                "SELECT created_at FROM chat_log_fts WHERE rowid=? AND room_id=?",
+                (rowid, str(room_id)),
+            ).fetchone()
+            if not target:
+                return []
+            older = conn.execute(
+                "SELECT content, sender, created_at FROM chat_log_fts "
+                "WHERE room_id=? AND created_at < ? "
+                "ORDER BY created_at DESC LIMIT ?",
+                (str(room_id), target["created_at"], before),
+            ).fetchall()
+            center = conn.execute(
+                "SELECT content, sender, created_at FROM chat_log_fts WHERE rowid=?",
+                (rowid,),
+            ).fetchall()
+            newer = conn.execute(
+                "SELECT content, sender, created_at FROM chat_log_fts "
+                "WHERE room_id=? AND created_at > ? "
+                "ORDER BY created_at ASC LIMIT ?",
+                (str(room_id), target["created_at"], after),
+            ).fetchall()
+        rows = list(reversed(older)) + list(center) + list(newer)
+        return [_format_search_row(r["created_at"], r["sender"], r["content"]) for r in rows]
+    except Exception:
+        return []
+
+
 def _prefers_recent_results(query: str) -> bool:
-    return any(word in query for word in ("최근", "언제", "시간", "날짜", "누가"))
+    return any(word in query for word in ("최근", "오늘", "어제", "언제", "시간", "날짜", "누가"))
 
 
 def _search_chat_log_like(room_id: int, query: str, limit: int) -> list[str]:
@@ -144,6 +338,44 @@ def get_chat_log_between(
         return [_format_row(r["created_at"], r["sender"], r["content"]) for r in rows]
     except Exception:
         return []
+
+
+def get_cached_chat_summary(room_id: int, date_label: str, query_key: str) -> str | None:
+    try:
+        with get_conn() as conn:
+            row = conn.execute(
+                "SELECT summary_text FROM chat_summary_cache WHERE room_id=? AND date_label=? AND query_key=?",
+                (room_id, date_label, query_key),
+            ).fetchone()
+        return row["summary_text"] if row else None
+    except Exception:
+        return None
+
+
+def set_cached_chat_summary(
+    room_id: int,
+    date_label: str,
+    query_key: str,
+    summary_text: str,
+    source_count: int,
+    now_iso: str,
+) -> None:
+    try:
+        with get_conn() as conn:
+            conn.execute(
+                """
+                INSERT INTO chat_summary_cache
+                (room_id, date_label, query_key, summary_text, source_count, created_at, updated_at)
+                VALUES (?, ?, ?, ?, ?, ?, ?)
+                ON CONFLICT(room_id, date_label, query_key) DO UPDATE SET
+                    summary_text=excluded.summary_text,
+                    source_count=excluded.source_count,
+                    updated_at=excluded.updated_at
+                """,
+                (room_id, date_label, query_key, summary_text, source_count, now_iso, now_iso),
+            )
+    except Exception:
+        pass
 
 
 def _format_row(created_at: str | None, sender: str, content: str) -> str:
