@@ -120,5 +120,16 @@ CREATE TABLE IF NOT EXISTS room_persona (
   sample_size INTEGER NOT NULL,
   computed_at TEXT NOT NULL
 );
+
+CREATE TABLE IF NOT EXISTS chat_summary_cache (
+  room_id INTEGER NOT NULL,
+  date_label TEXT NOT NULL,
+  query_key TEXT NOT NULL,
+  summary_text TEXT NOT NULL,
+  source_count INTEGER NOT NULL,
+  created_at TEXT NOT NULL,
+  updated_at TEXT NOT NULL,
+  PRIMARY KEY (room_id, date_label, query_key)
+);
 """
         )

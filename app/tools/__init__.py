@@ -1,6 +1,6 @@
 from app.dependencies import llm
 from app.tools.chat_history import search_chat_history, summarize_chat_history
-from app.tools.finance_research import compare_stocks, get_stock_news, get_stock_snapshot
+from app.tools.finance_research import compare_stocks, get_stock_news, get_stock_snapshot, summarize_korean_stock_market
 from app.tools.maplestory import lookup_maplestory_character
 from app.tools.memory import forget_user_memory, get_user_memory, remember_user_fact
 from app.tools.meso import get_maple_meso_price
@@ -33,6 +33,7 @@ tools = [
     get_stock_news,
     get_stock_snapshot,
     compare_stocks,
+    summarize_korean_stock_market,
 ]
 llm_with_tools = llm.bind_tools(tools)
 
@@ -58,6 +59,7 @@ __all__ = [
     "get_stock_news",
     "get_stock_snapshot",
     "compare_stocks",
+    "summarize_korean_stock_market",
     "tools",
     "llm_with_tools",
 ]

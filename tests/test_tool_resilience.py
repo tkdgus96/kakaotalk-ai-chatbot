@@ -5,6 +5,7 @@ from types import SimpleNamespace
 from unittest.mock import AsyncMock, patch
 
 from app.boss.db import init_schema
+from app.boss.utils.week import now_kst
 from app.chat_log import init_chat_log_schema
 from app.chat_log import add_chat_log
 from app.config import settings
@@ -35,7 +36,8 @@ class ToolResilienceTests(unittest.IsolatedAsyncioTestCase):
         self.assertIn("추측하지 마세요", answer)
 
     async def test_summarize_chat_history_short_log_preserves_message(self):
-        add_chat_log(123, "alice", "점심 메뉴만 얘기했어", "2026-06-30T10:00:00")
+        today = now_kst().replace(hour=10, minute=0, second=0, microsecond=0)
+        add_chat_log(123, "alice", "점심 메뉴만 얘기했어", today.isoformat())
 
         answer = await summarize_chat_history.ainvoke({"period": "오늘", "room_id": 123})
 

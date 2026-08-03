@@ -169,6 +169,7 @@ Behavior:
 ## Boss Commands
 
 - `!보스매주 [bossName]`
+- `!보스해제 [bossName]`
 - `!보스시간 [bossName] [dayOfWeek] [HH:mm]`
 - `!이번주보스`
 - `!드랍 [itemName] [price]`
@@ -179,6 +180,7 @@ Behavior:
 
 Examples:
 - `!보스매주 검마`
+- `!보스해제 검마`
 - `!보스시간 검마 토요일 22:00`
 - `!드랍 루컨마 84억`
 - `!드랍 검마 몽벨 220억`

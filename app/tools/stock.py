@@ -51,13 +51,16 @@ def normalize_stock_candidates(raw_query: str) -> list[str]:
     lowered_raw = normalized_raw.lower()
     cleaned_raw = re.sub(r"'s\b", "", normalized_raw)
     cleaned_lower = re.sub(r"'s\b", "", lowered_raw)
+    noise_stripped_lower = _strip_query_noise(cleaned_lower)
+    noise_stripped_lower = re.sub(r"[(),.]", " ", noise_stripped_lower)
+    noise_stripped_lower = re.sub(r"\s+", " ", noise_stripped_lower).strip()
 
     tokens_raw = re.findall(r"[0-9A-Za-z가-힣\.\^]+", cleaned_raw)
     tokens_lower = re.findall(r"[0-9A-Za-z가-힣\.\^]+", cleaned_lower)
 
     symbols: list[str] = []
 
-    exact_alias = alias_map.get(lowered_raw) or alias_map.get(cleaned_lower)
+    exact_alias = alias_map.get(lowered_raw) or alias_map.get(cleaned_lower) or alias_map.get(noise_stripped_lower)
     if exact_alias:
         symbols.append(exact_alias)
 
@@ -82,6 +85,8 @@ def normalize_stock_candidates(raw_query: str) -> list[str]:
 def is_symbol_like(token: str) -> bool:
     if re.fullmatch(r"[A-Z]{1,6}", token):
         return True
+    if re.fullmatch(r"[A-Z]{1,5}-[A-Z]", token):
+        return True
     upper = token.upper()
     if re.fullmatch(r"\d{6}(\.(KS|KQ))?", upper):
         return True
@@ -93,6 +98,12 @@ def is_symbol_like(token: str) -> bool:
 def _extract_first_ticker(text: str | None):
     if not text:
         return None
+    krx_match = re.search(r"\b\d{6}\.(?:KS|KQ)\b", text)
+    if krx_match:
+        return krx_match.group(0)
+    us_class_match = re.search(r"\b[A-Z]{1,5}[-.][A-Z]\b", text)
+    if us_class_match:
+        return us_class_match.group(0).replace(".", "-")
     match = re.search(r"\b[A-Z]{1,6}(?:\.(?:KS|KQ))?\b", text)
     if match:
         return match.group(0)
@@ -103,12 +114,21 @@ def _extract_first_ticker(text: str | None):
 
 
 async def _resolve_symbol_with_llm(raw_query: str):
+    symbols = await _resolve_symbols_with_llm(raw_query)
+    return symbols[0] if symbols else None
+
+
+async def _resolve_symbols_with_llm(raw_query: str) -> list[str]:
     prompt = [
         SystemMessage(
             content=(
-                "Extract the single most likely stock ticker from the user's query. "
-                "Return ticker only, uppercase, no extra text. "
-                "If Korea stock, return Yahoo format like 005930.KS or 035720.KQ. "
+                "Resolve the user's company/stock query to up to 5 likely stock tickers. "
+                "Return JSON only: {\"tickers\":[\"...\"]}. "
+                "Use Yahoo ticker format. For Korean listed companies use 6 digits plus .KS or .KQ. "
+                "Prefer the exact legal/company name over a related affiliate. "
+                "For English names of Korean listed companies, resolve the Korean listing when the query asks 주가. "
+                "Do not return short words from the company name as tickers unless they are the actual listed ticker "
+                "(for example, do not return SK for SK Hynix, HD for HD Hyundai, C for Samsung C&T, or KS by itself). "
                 "If unknown, return UNKNOWN."
             )
         ),
@@ -116,11 +136,86 @@ async def _resolve_symbol_with_llm(raw_query: str):
     ]
     try:
         response = await llm.ainvoke(prompt)
-        ticker = _extract_first_ticker(str(response.content).strip())
+        return _extract_tickers(str(response.content).strip())
+    except Exception:
+        return []
+
+
+def _extract_tickers(text: str | None) -> list[str]:
+    if not text:
+        return []
+    raw = text.strip()
+    try:
+        data = json.loads(raw)
+        values = data.get("tickers", []) if isinstance(data, dict) else data
+        if isinstance(values, list):
+            out = []
+            for value in values:
+                ticker = _extract_first_ticker(str(value).strip())
+                if ticker and is_symbol_like(ticker):
+                    out.append(ticker)
+            return list(dict.fromkeys(out))
+    except Exception:
+        pass
+
+    out = []
+    for match in re.finditer(r"\b\d{6}\.(?:KS|KQ)\b|\b[A-Z]{1,5}[-.][A-Z]\b|\b[A-Z]{1,6}\b|\^[A-Z0-9]{2,8}", raw):
+        ticker = _extract_first_ticker(match.group(0))
         if ticker and is_symbol_like(ticker):
-            return ticker
+            out.append(ticker)
+    return list(dict.fromkeys(out))
+
+
+_QUERY_NOISE_RE = re.compile(
+    r"주가|주식|시세|가격|현재가|종가|얼마|알려줘|가르쳐|좀|stocks?|prices?|quotes?|shares?",
+    re.IGNORECASE,
+)
+
+
+def _strip_query_noise(query: str) -> str:
+    cleaned = _QUERY_NOISE_RE.sub(" ", query)
+    return re.sub(r"\s+", " ", cleaned).strip()
+
+
+async def _naver_autocomplete(client: httpx.AsyncClient, query: str):
+    try:
+        resp = await client.get(
+            "https://ac.stock.naver.com/ac",
+            params={"q": query, "target": "stock"},
+            headers={"User-Agent": "Mozilla/5.0"},
+        )
+        if resp.status_code != 200:
+            return None
+        items = resp.json().get("items", [])
     except Exception:
         return None
+
+    for item in items:
+        if item.get("category") != "stock":
+            continue
+        code = item.get("code")
+        if not code:
+            continue
+        if item.get("nationCode") == "KOR":
+            suffix = ".KQ" if item.get("typeCode") == "KOSDAQ" else ".KS"
+            return f"{code}{suffix}"
+        # Foreign listing — Naver's code is already a Yahoo-compatible ticker.
+        return code.upper().replace(".", "-")
+    return None
+
+
+async def _resolve_with_naver(client: httpx.AsyncClient, raw_query: str):
+    """Resolve a free-form company name to a tradable symbol via Naver's stock
+    autocomplete. Handles Korean and foreign listings, including recent IPOs the
+    LLM/Yahoo-search resolvers miss. Trailing question words ("...주가", "...stock
+    price") break the autocomplete, so retry with them stripped. Returns a
+    Yahoo-format symbol or None."""
+    symbol = await _naver_autocomplete(client, raw_query)
+    if symbol:
+        return symbol
+    cleaned = _strip_query_noise(raw_query)
+    if cleaned and cleaned != raw_query:
+        return await _naver_autocomplete(client, cleaned)
     return None
 
 
@@ -131,6 +226,13 @@ def get_krx_code(symbol: str):
     if (upper_symbol.endswith(".KS") or upper_symbol.endswith(".KQ")) and upper_symbol[:-3].isdigit() and len(upper_symbol[:-3]) == 6:
         return upper_symbol[:-3]
     return None
+
+
+def _looks_like_freeform_query(raw_query: str) -> bool:
+    tokens = re.findall(r"[0-9A-Za-z가-힣\.\^\-]+", raw_query.strip())
+    if len(tokens) <= 1:
+        return False
+    return not is_symbol_like(raw_query.strip())
 
 
 async def _get_kis_token(client: httpx.AsyncClient):
@@ -220,13 +322,18 @@ async def _fetch_naver_krx_quote(client: httpx.AsyncClient, code: str):
             return None, f"네이버 시세 조회 실패: HTTP {resp.status_code}"
 
         data = None
+        # Naver replies with charset=EUC-KR; resp.json() decodes raw bytes as
+        # UTF-8 and blows up on Korean names, so parse resp.text (httpx already
+        # honors the response charset) instead.
         raw_text = resp.text.strip()
         try:
-            data = resp.json()
-        except Exception:
             if "(" in raw_text and raw_text.endswith(")"):
                 inner = raw_text[raw_text.find("(") + 1 : raw_text.rfind(")")]
                 data = json.loads(inner)
+            else:
+                data = json.loads(raw_text)
+        except Exception:
+            return None, None
 
         if not isinstance(data, dict):
             return None, None
@@ -341,21 +448,55 @@ async def get_stock_quote(symbol_or_name: str) -> str:
 
     try:
         async with httpx.AsyncClient(timeout=10.0) as client:
-            # For plain text company names (e.g. "팔란티어"), resolve ticker first.
-            if not any(is_symbol_like(sym) for sym in candidate_symbols):
-                llm_symbol = await _resolve_symbol_with_llm(raw_query)
-                if llm_symbol:
-                    candidate_symbols.insert(0, llm_symbol)
-                search_resp = await client.get(
-                    "https://query1.finance.yahoo.com/v1/finance/search",
-                    params={"q": raw_query, "quotesCount": 8, "newsCount": 0},
+            # For free-form company names (e.g. "팔란티어", "LG CNS", "엘지씨엔에스"),
+            # resolve the ticker dynamically rather than relying on a static alias
+            # map. A bare ticker/code (META, 005930.KS, 064400) is taken as-is.
+            raw_is_symbol = is_symbol_like(raw_query) or (raw_query.isdigit() and len(raw_query) == 6)
+            if not raw_is_symbol:
+                trusted_symbols: set[str] = set()
+                static_krx_symbol = (
+                    candidate_symbols[0]
+                    if candidate_symbols and _looks_like_freeform_query(raw_query) and get_krx_code(candidate_symbols[0])
+                    else None
                 )
-                if search_resp.status_code == 200:
-                    quotes = search_resp.json().get("quotes", [])
-                    equity = next((q for q in quotes if q.get("quoteType") == "EQUITY"), None)
-                    if equity and equity.get("symbol"):
-                        candidate_symbols.insert(0, equity["symbol"])
+                if static_krx_symbol:
+                    trusted_symbols.add(static_krx_symbol)
+                if not static_krx_symbol:
+                    naver_symbol = await _resolve_with_naver(client, raw_query)
+                    if naver_symbol:
+                        candidate_symbols.insert(0, naver_symbol)
+                        trusted_symbols.add(naver_symbol)
                         candidate_symbols = list(dict.fromkeys(candidate_symbols))
+
+                    # Free-form names can contain misleading ticker-looking tokens
+                    # ("SK Hynix", "Samsung C&T", "HD Hyundai"). Resolve the full
+                    # phrase before trying extracted one-token candidates.
+                    llm_symbols = await _resolve_symbols_with_llm(raw_query)
+                    for llm_symbol in reversed(llm_symbols):
+                        candidate_symbols.insert(0, llm_symbol)
+                        trusted_symbols.add(llm_symbol)
+                    if llm_symbols:
+                        candidate_symbols = list(dict.fromkeys(candidate_symbols))
+
+                    search_resp = await client.get(
+                        "https://query1.finance.yahoo.com/v1/finance/search",
+                        params={"q": raw_query, "quotesCount": 8, "newsCount": 0},
+                    )
+                    if search_resp.status_code == 200:
+                        quotes = search_resp.json().get("quotes", [])
+                        equity = next((q for q in quotes if q.get("quoteType") == "EQUITY"), None)
+                        if equity and equity.get("symbol"):
+                            yahoo_symbol = equity["symbol"].replace(".", "-")
+                            candidate_symbols.insert(0, yahoo_symbol)
+                            trusted_symbols.add(yahoo_symbol)
+                            candidate_symbols = list(dict.fromkeys(candidate_symbols))
+
+                if _looks_like_freeform_query(raw_query):
+                    candidate_symbols = [
+                        sym
+                        for sym in candidate_symbols
+                        if sym != raw_query and (sym in trusted_symbols or not re.fullmatch(r"[A-Z]{1,2}", sym))
+                    ] or [raw_query]
 
             quote = None
             err = None

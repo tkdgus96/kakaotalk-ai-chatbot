@@ -11,6 +11,7 @@ class ParsedCommand:
 
 KNOWN_COMMANDS = {
     "!보스매주",
+    "!보스해제",
     "!보스시간",
     "!이번주보스",
     "!드랍",
