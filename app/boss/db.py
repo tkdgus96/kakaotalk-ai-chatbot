@@ -121,6 +121,26 @@ CREATE TABLE IF NOT EXISTS room_persona (
   computed_at TEXT NOT NULL
 );
 
+CREATE TABLE IF NOT EXISTS recurring_reminder (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  room_id INTEGER NOT NULL,
+  fire_hour INTEGER NOT NULL,
+  fire_minute INTEGER NOT NULL,
+  template TEXT NOT NULL,
+  start_date TEXT NOT NULL,
+  created_by TEXT NOT NULL,
+  enabled INTEGER NOT NULL DEFAULT 1,
+  created_at TEXT NOT NULL,
+  updated_at TEXT NOT NULL
+);
+
+CREATE TABLE IF NOT EXISTS room_topics (
+  room_id INTEGER PRIMARY KEY,
+  topics_json TEXT NOT NULL,
+  sample_size INTEGER NOT NULL,
+  computed_at TEXT NOT NULL
+);
+
 CREATE TABLE IF NOT EXISTS chat_summary_cache (
   room_id INTEGER NOT NULL,
   date_label TEXT NOT NULL,

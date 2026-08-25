@@ -33,6 +33,14 @@ user_profile_store = Chroma(
     persist_directory="./chroma_db",
 )
 
+# Cheap model for clearly-casual turns (see _needs_full_model in app/graph.py).
+light_llm = ChatOpenAI(
+    model=settings.light_model,
+    api_key=settings.openai_api_key,
+    temperature=0.7,
+    max_tokens=1000,
+)
+
 fact_extractor_llm = ChatOpenAI(
     model="gpt-4o-mini",
     api_key=settings.openai_api_key,

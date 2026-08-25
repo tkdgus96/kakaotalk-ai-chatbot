@@ -48,6 +48,8 @@ class Settings:
     playground_sender: str
     prompt_variant_overrides: dict[int, str]
     default_prompt_variant: str
+    enable_model_routing: bool
+    light_model: str
     max_crawl_urls: int
     crawl_timeout: float
     enable_js: bool
@@ -82,6 +84,8 @@ settings = Settings(
     playground_sender=os.getenv("PLAYGROUND_SENDER", "dev_user"),
     prompt_variant_overrides=_parse_variant_overrides(os.getenv("PROMPT_VARIANT_OVERRIDES", "")),
     default_prompt_variant=os.getenv("DEFAULT_PROMPT_VARIANT", "default"),
+    enable_model_routing=os.getenv("ENABLE_MODEL_ROUTING", "true").lower() in {"1", "true", "yes", "on"},
+    light_model=os.getenv("LIGHT_MODEL", "gpt-4o-mini"),
     max_crawl_urls=int(os.getenv("MAX_CRAWL_URLS", "3")),
     crawl_timeout=float(os.getenv("CRAWL_TIMEOUT", "10")),
     enable_js=os.getenv("ENABLE_JS", "true").lower() in {"1", "true", "yes", "on"},

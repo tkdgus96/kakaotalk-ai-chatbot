@@ -340,6 +340,40 @@ def get_chat_log_between(
         return []
 
 
+def list_room_senders(room_id: int, limit: int = 50) -> list[str]:
+    """Return the room's known member names, most active first. Used to detect
+    when a query mentions another member (so their facts can be loaded too)."""
+    if not _ensure_fts_available():
+        return []
+    try:
+        with get_conn() as conn:
+            rows = conn.execute(
+                "SELECT sender, COUNT(*) AS cnt FROM chat_log_fts "
+                "WHERE room_id=? GROUP BY sender ORDER BY cnt DESC LIMIT ?",
+                (str(room_id), limit),
+            ).fetchall()
+        return [str(r["sender"]) for r in rows if r["sender"]]
+    except Exception:
+        return []
+
+
+def get_recent_chat_log(room_id: int, limit: int = 300) -> list[str]:
+    """Return the most recent raw messages (chronological order), unformatted
+    sender: content lines. Used for room topic extraction."""
+    if not _ensure_fts_available():
+        return []
+    try:
+        with get_conn() as conn:
+            rows = conn.execute(
+                "SELECT content, sender FROM chat_log_fts "
+                "WHERE room_id=? ORDER BY created_at DESC LIMIT ?",
+                (str(room_id), limit),
+            ).fetchall()
+        return [f"[{r['sender']}]: {r['content']}" for r in reversed(rows)]
+    except Exception:
+        return []
+
+
 def get_cached_chat_summary(room_id: int, date_label: str, query_key: str) -> str | None:
     try:
         with get_conn() as conn:
