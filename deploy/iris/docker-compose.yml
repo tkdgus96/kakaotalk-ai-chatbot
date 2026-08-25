@@ -1,0 +1,25 @@
+# Redroid (Android in Docker) for the Iris KakaoTalk bridge.
+#
+# 사전 조건 (호스트 리눅스, deploy/iris/README.md 참고):
+#   1) binder 커널 모듈:  sudo modprobe binder_linux devices="binder,hwbinder,vndbinder"
+#   2) x86_64 호스트면 카카오톡(ARM 네이티브)을 위해 ARM 변환 레이어가 포함된
+#      이미지가 필요 → redroid-script(libndk)로 커스텀 이미지를 만들고 image: 를 교체.
+#      (https://github.com/ayasa520/redroid-script)
+#
+# 포트는 전부 127.0.0.1 바인딩 — Iris HTTP API는 무인증이므로 외부에 열지 말 것.
+services:
+  redroid:
+    image: redroid/redroid:12.0.0-latest # x86_64 + ARM변환 커스텀 이미지면 교체
+    container_name: iris-redroid
+    privileged: true
+    restart: unless-stopped
+    volumes:
+      - ./redroid-data:/data
+    command:
+      - androidboot.redroid_gpu_mode=guest
+      - androidboot.redroid_width=720
+      - androidboot.redroid_height=1280
+      - androidboot.redroid_dpi=320
+    ports:
+      - "127.0.0.1:5555:5555" # adb
+      - "127.0.0.1:3000:3000" # Iris HTTP API (/reply, /query, /dashboard)

@@ -6,6 +6,7 @@ from app.config import settings
 from app.dependencies import boss_service, logger
 from app.models import KakaoMsg, OutboxAckRequest
 from app.services.chat_service import handle_chat
+from app.services.iris_service import handle_iris_webhook
 
 router = APIRouter()
 
@@ -48,6 +49,30 @@ async def settlement_view(public_token: str):
         return HTMLResponse("Not found", status_code=404)
     settlement, drops = found
     return HTMLResponse(render_settlement_html(settlement, drops))
+
+
+@router.post("/iris")
+async def iris_webhook(request: Request):
+    """Webhook target for the Iris bridge (set Iris web_server_endpoint to
+    http://<backend>:8000/iris). Replies are pushed back via Iris /reply,
+    not in this HTTP response."""
+    try:
+        payload = await request.json()
+    except Exception:
+        return {"ok": False, "message": "invalid json"}
+    return await handle_iris_webhook(payload)
+
+
+@router.get("/iris/rooms")
+async def iris_room_map():
+    """Current chat_id -> room_id mapping (debugging / IRIS_ROOM_MAP 작성용)."""
+    from app.boss.db import get_conn
+
+    with get_conn() as conn:
+        rows = conn.execute(
+            "SELECT chat_id, room_id, room_name, updated_at FROM iris_room_map ORDER BY updated_at DESC"
+        ).fetchall()
+    return {"rooms": [dict(r) for r in rows]}
 
 
 @router.get("/bot/outbox")

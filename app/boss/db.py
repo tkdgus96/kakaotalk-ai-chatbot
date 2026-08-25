@@ -134,6 +134,14 @@ CREATE TABLE IF NOT EXISTS recurring_reminder (
   updated_at TEXT NOT NULL
 );
 
+CREATE TABLE IF NOT EXISTS iris_room_map (
+  chat_id INTEGER PRIMARY KEY,
+  room_id INTEGER NOT NULL,
+  room_name TEXT NOT NULL,
+  created_at TEXT NOT NULL,
+  updated_at TEXT NOT NULL
+);
+
 CREATE TABLE IF NOT EXISTS room_topics (
   room_id INTEGER PRIMARY KEY,
   topics_json TEXT NOT NULL,

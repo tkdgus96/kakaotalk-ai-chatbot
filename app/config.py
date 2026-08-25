@@ -50,6 +50,12 @@ class Settings:
     default_prompt_variant: str
     enable_model_routing: bool
     light_model: str
+    iris_base_url: str
+    iris_bot_triggers: list[str]
+    iris_self_names: set[str]
+    iris_room_map_seed: str
+    enable_iris_sender: bool
+    iris_sender_interval_seconds: int
     max_crawl_urls: int
     crawl_timeout: float
     enable_js: bool
@@ -86,6 +92,12 @@ settings = Settings(
     default_prompt_variant=os.getenv("DEFAULT_PROMPT_VARIANT", "default"),
     enable_model_routing=os.getenv("ENABLE_MODEL_ROUTING", "true").lower() in {"1", "true", "yes", "on"},
     light_model=os.getenv("LIGHT_MODEL", "gpt-4o-mini"),
+    iris_base_url=os.getenv("IRIS_BASE_URL", "http://127.0.0.1:3000"),
+    iris_bot_triggers=[t.strip() for t in os.getenv("IRIS_BOT_TRIGGERS", "!,！,온반봇").split(",") if t.strip()],
+    iris_self_names={n.strip() for n in os.getenv("IRIS_SELF_NAMES", "온반봇").split(",") if n.strip()},
+    iris_room_map_seed=os.getenv("IRIS_ROOM_MAP", ""),
+    enable_iris_sender=os.getenv("ENABLE_IRIS_SENDER", "false").lower() in {"1", "true", "yes", "on"},
+    iris_sender_interval_seconds=int(os.getenv("IRIS_SENDER_INTERVAL_SECONDS", "5")),
     max_crawl_urls=int(os.getenv("MAX_CRAWL_URLS", "3")),
     crawl_timeout=float(os.getenv("CRAWL_TIMEOUT", "10")),
     enable_js=os.getenv("ENABLE_JS", "true").lower() in {"1", "true", "yes", "on"},

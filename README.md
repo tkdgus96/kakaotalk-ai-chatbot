@@ -222,6 +222,15 @@ Delivery model:
 - Scheduler writes reminders to `bot_outbox`.
 - Android Kakao script polls `/bot/outbox`, calls `Api.replyRoom(room_name, message)`, then `ack`.
 
+### Iris Bridge (redroid — phone replacement)
+
+- `POST /iris` — webhook target for the [Iris](https://github.com/dolidolih/Iris) bridge; converts
+  the payload to `KakaoMsg` and runs the same pipeline. Replies go back via Iris `POST /reply`.
+- `GET /iris/rooms` — current `chat_id -> room_id` mapping (`IRIS_ROOM_MAP` 작성용).
+- `ENABLE_IRIS_SENDER=true` — the backend delivers `bot_outbox` rows itself through Iris
+  (replaces phone polling; exact-time delivery for `!매일` reminders).
+- Setup guide: `deploy/iris/README.md` (redroid compose, kernel prereqs, room_id 연속성 매핑, 전환 절차).
+
 ## Tests
 
 ```bash
