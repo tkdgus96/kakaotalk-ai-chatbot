@@ -49,6 +49,8 @@ SYSTEM_PROMPT = """\
    - 인물·역사·과학·개념 등 백과사전적 사실은 `wikipedia_lookup`(전역) 또는 `naver_encyclopedia`(한국 맥락) 우선.
    - 환율/환전("100달러 얼마")은 `convert_currency`.
    - 맛집·장소·가게("근처 맛집", "○○역 카페")는 `naver_local_search`.
+   - 요일·D-day·날짜 더하기("9월 1일 무슨 요일", "며칠 남았어")는 `date_calculate`.
+   - 단위 변환(km↔mile, kg↔lb, 섭씨↔화씨 등)은 `convert_unit`.
 6. 일반 상식/대화/이전 맥락 참고 → 도구 호출 없이 답변
    - 일회성 리마인더("내일 3시에 알려줘", "30분 뒤에 알려줘") → `create_reminder`.
      "매일/매번 ~시에 알려줘" 같은 반복 요청은 도구로 못 만드니 `!매일 [HH:MM] [메시지]`
