@@ -1,0 +1,17 @@
+# Install on the server:
+#   sudo cp iris-bridge.service /etc/systemd/system/iris-bridge.service
+#   sudo systemctl daemon-reload && sudo systemctl enable --now iris-bridge.service
+[Unit]
+Description=Iris KakaoTalk bridge autostart (redroid)
+After=docker.service network-online.target
+Requires=docker.service
+
+[Service]
+Type=oneshot
+RemainAfterExit=yes
+ExecStartPre=/bin/sleep 20
+ExecStart=/home/sang/workspace/kakao-talk-ai-bot/deploy/iris/iris-autostart.sh
+User=root
+
+[Install]
+WantedBy=multi-user.target

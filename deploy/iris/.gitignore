@@ -1,0 +1,10 @@
+# Runtime / binary artifacts — never commit
+redroid-data/
+Iris.apk
+Iris.apk.MD5
+iris_control
+iris_control.ps1
+kakao-split/
+KakaoTalk.apk
+*.bak
+*.bak.*
