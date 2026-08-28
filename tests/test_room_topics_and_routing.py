@@ -26,16 +26,19 @@ class RoomTopicsTests(unittest.TestCase):
     def test_parse_expansions_tolerates_bad_json(self):
         self.assertEqual(_parse_expansions("json이 아님"), {})
 
-    def test_room_expansions_merge_computed_topics_over_seed(self):
+    def test_room_expansions_use_computed_topics_only(self):
         room_topics._cache[7] = (datetime.now().isoformat(), {"고양이": ["고양이", "냥이"]})
 
         merged = _room_expansions(7)
 
-        self.assertIn("고양이", merged)
-        self.assertIn("보스", merged)  # seed fallback preserved
+        self.assertEqual(merged, {"고양이": ["고양이", "냥이"]})  # no hardcoded seed
 
         terms = _focus_terms("어제 고양이 얘기 뭐였지", room_id=7)
         self.assertIn("냥이", terms)
+
+    def test_room_without_topics_has_no_expansions(self):
+        room_topics._cache.clear()
+        self.assertEqual(_room_expansions(999), {})
 
     def test_augment_recall_query_uses_room_topics(self):
         room_topics._cache[7] = (datetime.now().isoformat(), {"고양이": ["고양이", "냥이"]})

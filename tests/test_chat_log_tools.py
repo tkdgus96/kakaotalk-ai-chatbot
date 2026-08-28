@@ -141,10 +141,12 @@ class ChatLogToolTests(unittest.TestCase):
         self.assertEqual(answer, "너는 지금 이 방에서 '이재용은신이야'로 말하고 있어.")
 
     def test_recall_query_augments_room_preference(self):
+        # Brand-specific aliases are now learned per room (room_topics), not
+        # hardcoded; the generic preference intent still expands.
         query = _augment_recall_query("파파존스 추천해줘. 이 방에서 나온 취향 기준으로.")
 
-        self.assertIn("존스페이버릿", query)
-        self.assertIn("수퍼파파스", query)
+        self.assertIn("맛있", query)
+        self.assertIn("추천", query)
 
     def test_recall_query_augments_bot_complaints(self):
         query = _augment_recall_query("최근 이 방에서 온반봇에 대해 나온 불만이 뭐였는지 정리해줘.")

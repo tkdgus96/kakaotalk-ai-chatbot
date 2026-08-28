@@ -332,28 +332,12 @@ def _select_relevant_raw_lines(
     return selected
 
 
-# Fallback expansions until a room has LLM-computed topics (app/room_topics.py).
-# Room-specific entries here predate auto-extraction and can be removed once
-# the live rooms have a computed room_topics row.
-_SEED_EXPANSIONS = {
-    "검마": ["검마", "검은마법사"],
-    "루시드": ["루시드"],
-    "보스": ["보스", "검마", "루시드", "해방"],
-    "파파존스": ["파파존스", "존스페이버릿", "수퍼파파스", "아이리쉬", "포테이토"],
-    "메소": ["메소", "메소시세", "게임비트", "아이템매니아"],
-    "주가": ["주가", "삼성전자", "하이닉스", "코스피", "코스닥"],
-    "오사카": ["오사카", "교토", "일본", "여행", "금각사"],
-    "교토": ["교토", "오사카", "일본", "여행", "금각사"],
-    "정산": ["정산", "드랍"],
-    "드랍": ["드랍", "정산"],
-    "단어맞추기": ["단어맞추기", "인별", "기록", "챌린지"],
-}
-
-
+# Query-term expansions are now learned per room (app/room_topics.py), computed
+# weekly from each room's own logs — no hardcoded room-specific dictionaries.
 def _room_expansions(room_id: int | None) -> dict[str, list[str]]:
     if room_id is None:
-        return _SEED_EXPANSIONS
-    return {**_SEED_EXPANSIONS, **get_room_topic_expansions(room_id)}
+        return {}
+    return get_room_topic_expansions(room_id)
 
 
 def _focus_terms(query: str, room_id: int | None = None) -> list[str]:
@@ -558,6 +542,14 @@ async def chat(state: ChatState) -> dict:
         return {"messages": [AIMessage(content=identity_answer)]}
     if unsafe_answer := _unsafe_directive_answer(query):
         return {"messages": [AIMessage(content=unsafe_answer)]}
+    if injection_answer := _injection_guard_answer(query):
+        try:
+            from app.services.audit_service import record_audit
+
+            record_audit("injection_blocked", room_id, sender, query[:200])
+        except Exception:
+            pass
+        return {"messages": [AIMessage(content=injection_answer)]}
 
     variant = settings.prompt_variant_overrides.get(room_id, settings.default_prompt_variant)
     now_str = now_kst().strftime("%Y-%m-%d %H:%M:%S %A KST")
@@ -586,10 +578,19 @@ async def chat(state: ChatState) -> dict:
     messages = [SystemMessage(content=system_content)] + list(state["messages"])
     if _should_answer_from_retrieved_context(query, context):
         response = await llm.ainvoke(messages)
+        used_model = "gpt-4o"
     elif settings.enable_model_routing and not _needs_full_model(query):
         response = await light_llm_with_tools.ainvoke(messages)
+        used_model = settings.light_model
     else:
         response = await llm_with_tools.ainvoke(messages)
+        used_model = "gpt-4o"
+    try:
+        from app.services.usage_service import record_message_usage
+
+        record_message_usage(response, "chat", used_model, room_id, sender)
+    except Exception:
+        pass
     if not getattr(response, "tool_calls", None) and isinstance(response.content, str):
         response.content = _normalize_chat_output(response.content)
     return {"messages": [response]}
@@ -628,6 +629,21 @@ def _unsafe_directive_answer(query: str) -> str | None:
     compact = re.sub(r"\s+", "", text)
     if any(phrase in compact for phrase in ("스스로를죽여라", "자살해", "죽어라", "죽여라")):
         return "그런 요청은 못 해. 장난이어도 위험한 표현이라 여기선 안 받을게."
+    return None
+
+
+_INJECTION_PATTERNS = (
+    "이전지시무시", "위지시무시", "규칙무시", "시스템프롬프트", "프롬프트알려", "프롬프트보여",
+    "프롬프트를알려", "너의규칙을무시", "ignoreprevious", "ignoreallprevious", "systemprompt",
+    "developermessage", "네설정을무시",
+)
+
+
+def _injection_guard_answer(query: str) -> str | None:
+    text = re.sub(r"^\[[^\]]+\]:\s*", "", query.strip())
+    compact = re.sub(r"\s+", "", text).lower()
+    if any(p in compact for p in _INJECTION_PATTERNS):
+        return "미안, 내 설정이나 규칙을 바꾸거나 공개하는 요청은 들어줄 수 없어."
     return None
 
 
@@ -687,8 +703,11 @@ async def store(state: ChatState) -> dict:
             break
 
     if last_human:
-        content = last_human.content if isinstance(last_human.content, str) else str(last_human.content)
-        await _extract_and_store_user_facts(content, room_id, sender, now)
+        from app.services.memory_service import is_opted_out
+
+        if not await asyncio.to_thread(is_opted_out, room_id, sender):
+            content = last_human.content if isinstance(last_human.content, str) else str(last_human.content)
+            await _extract_and_store_user_facts(content, room_id, sender, now)
     return {}
 
 

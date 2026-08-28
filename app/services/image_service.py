@@ -144,6 +144,9 @@ async def describe_image(url: str, question: str) -> str | None:
                 )
             ]
         )
+        from app.services.usage_service import record_message_usage
+
+        record_message_usage(resp, "vision", "gpt-4o")
         return resp.content if isinstance(resp.content, str) else str(resp.content)
     except Exception as e:
         logger.warning("vision describe failed: %s", e)
@@ -158,7 +161,22 @@ async def maybe_answer_with_image(room_id: int, msg: str) -> str | None:
     if not url:
         return None
     question = _strip_command_prefix(msg)
-    return await describe_image(url, question)
+    answer = await describe_image(url, question)
+    if answer:
+        # Remember what the photo showed so it's searchable later ("저번 그 사진").
+        try:
+            import asyncio
+
+            from app.boss.utils.week import now_kst
+            from app.chat_log import add_chat_log
+
+            summary = answer[:300].replace("\n", " ")
+            await asyncio.to_thread(
+                add_chat_log, room_id, "온반봇", f"[사진 설명] {summary}", now_kst().isoformat()
+            )
+        except Exception:
+            pass
+    return answer
 
 
 def _strip_command_prefix(msg: str) -> str:
@@ -168,8 +186,24 @@ def _strip_command_prefix(msg: str) -> str:
     return text.strip()
 
 
+async def is_prompt_flagged(prompt: str) -> bool:
+    """Run OpenAI moderation on a generation prompt; True if disallowed."""
+    if not settings.openai_api_key:
+        return False
+    try:
+        client = AsyncOpenAI(api_key=settings.openai_api_key)
+        res = await client.moderations.create(model="omni-moderation-latest", input=prompt)
+        return bool(res.results and res.results[0].flagged)
+    except Exception as e:
+        logger.warning("moderation check failed (allowing): %s", e)
+        return False
+
+
 async def generate_image_b64(prompt: str) -> str | None:
     if not settings.openai_api_key:
+        return None
+    if await is_prompt_flagged(prompt):
+        logger.info("image prompt blocked by moderation")
         return None
     # NOTE: `response_format` is omitted (this account's images API rejects it).
     # gpt-image-1 returns b64_json; other models may return a url (downloaded).
@@ -179,6 +213,9 @@ async def generate_image_b64(prompt: str) -> str | None:
             model=settings.image_gen_model, prompt=prompt, size="1024x1024", n=1
         )
         item = res.data[0]
+        from app.services.usage_service import record_image_usage
+
+        record_image_usage(settings.image_gen_model)
         b64 = getattr(item, "b64_json", None)
         if b64:
             return _to_send_jpeg_b64(base64.b64decode(b64))

@@ -71,6 +71,10 @@ class Settings:
     openai_admin_key: str | None
     cost_report_hour: int
     enable_health_monitor: bool
+    image_gen_daily_limit: int
+    chat_per_min_limit: int
+    chat_log_retention_days: int
+    admin_room_id: int
     max_crawl_urls: int
     crawl_timeout: float
     enable_js: bool
@@ -114,7 +118,7 @@ settings = Settings(
     iris_room_map_seed=os.getenv("IRIS_ROOM_MAP", ""),
     enable_iris_sender=os.getenv("ENABLE_IRIS_SENDER", "false").lower() in {"1", "true", "yes", "on"},
     iris_sender_interval_seconds=int(os.getenv("IRIS_SENDER_INTERVAL_SECONDS", "5")),
-    health_heartbeat_minutes=int(os.getenv("HEALTH_HEARTBEAT_MINUTES", "30")),
+    health_heartbeat_minutes=int(os.getenv("HEALTH_HEARTBEAT_MINUTES", "360")),
     health_self_chat_id=int(os.getenv("HEALTH_SELF_CHAT_ID", "0")),
     health_iris_fail_threshold=int(os.getenv("HEALTH_IRIS_FAIL_THRESHOLD", "3")),
     health_kakao_fail_threshold=int(os.getenv("HEALTH_KAKAO_FAIL_THRESHOLD", "2")),
@@ -128,6 +132,10 @@ settings = Settings(
     openai_admin_key=os.getenv("OPENAI_ADMIN_KEY") or None,
     cost_report_hour=int(os.getenv("COST_REPORT_HOUR", "9")),
     enable_health_monitor=os.getenv("ENABLE_HEALTH_MONITOR", "true").lower() in {"1", "true", "yes", "on"},
+    image_gen_daily_limit=int(os.getenv("IMAGE_GEN_DAILY_LIMIT", "15")),
+    chat_per_min_limit=int(os.getenv("CHAT_PER_MIN_LIMIT", "8")),
+    chat_log_retention_days=int(os.getenv("CHAT_LOG_RETENTION_DAYS", "0")),
+    admin_room_id=int(os.getenv("ADMIN_ROOM_ID", "0")),
     max_crawl_urls=int(os.getenv("MAX_CRAWL_URLS", "3")),
     crawl_timeout=float(os.getenv("CRAWL_TIMEOUT", "10")),
     enable_js=os.getenv("ENABLE_JS", "true").lower() in {"1", "true", "yes", "on"},

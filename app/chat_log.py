@@ -343,6 +343,22 @@ def get_chat_log_between(
         return []
 
 
+def purge_old_chat_log(retention_days: int) -> int:
+    """Delete raw chat-log rows older than retention_days. Returns rows deleted.
+    retention_days <= 0 keeps everything (no-op)."""
+    if retention_days <= 0 or not _ensure_fts_available():
+        return 0
+    from datetime import datetime, timedelta
+
+    cutoff = (datetime.now() - timedelta(days=retention_days)).isoformat()
+    try:
+        with get_conn() as conn:
+            cur = conn.execute("DELETE FROM chat_log_fts WHERE created_at < ?", (cutoff,))
+            return cur.rowcount or 0
+    except Exception:
+        return 0
+
+
 def list_room_senders(room_id: int, limit: int = 50) -> list[str]:
     """Return the room's known member names, most active first. Used to detect
     when a query mentions another member (so their facts can be loaded too)."""

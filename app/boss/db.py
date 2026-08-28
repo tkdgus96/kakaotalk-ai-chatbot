@@ -142,6 +142,46 @@ CREATE TABLE IF NOT EXISTS iris_room_map (
   updated_at TEXT NOT NULL
 );
 
+CREATE TABLE IF NOT EXISTS llm_usage (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  room_id INTEGER,
+  sender TEXT,
+  kind TEXT NOT NULL,            -- chat | vision | image_gen | fact | summary | persona | topics
+  model TEXT,
+  prompt_tokens INTEGER NOT NULL DEFAULT 0,
+  completion_tokens INTEGER NOT NULL DEFAULT 0,
+  est_cost_usd REAL NOT NULL DEFAULT 0,
+  created_at TEXT NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_llm_usage_created ON llm_usage(created_at);
+
+CREATE TABLE IF NOT EXISTS usage_counter (
+  scope_key TEXT NOT NULL,       -- e.g. "image_gen:<sender>" or "chat:<room_id>"
+  window_key TEXT NOT NULL,      -- e.g. "2026-08-29" (day) or "2026-08-29T21:30" (minute)
+  count INTEGER NOT NULL DEFAULT 0,
+  PRIMARY KEY (scope_key, window_key)
+);
+
+CREATE TABLE IF NOT EXISTS room_facts (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  room_id INTEGER NOT NULL,
+  subject TEXT NOT NULL,
+  predicate TEXT NOT NULL,
+  object TEXT NOT NULL,
+  source_sender TEXT,
+  created_at TEXT NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_room_facts_room ON room_facts(room_id);
+
+CREATE TABLE IF NOT EXISTS audit_log (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  action TEXT NOT NULL,
+  room_id INTEGER,
+  sender TEXT,
+  detail TEXT,
+  created_at TEXT NOT NULL
+);
+
 CREATE TABLE IF NOT EXISTS room_topics (
   room_id INTEGER PRIMARY KEY,
   topics_json TEXT NOT NULL,

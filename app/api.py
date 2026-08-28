@@ -5,6 +5,7 @@ from app.boss.render import render_settlement_html
 from app.config import settings
 from app.dependencies import boss_service, logger
 from app.models import KakaoMsg, OutboxAckRequest
+from app.services.audit_service import record_audit
 from app.services.chat_service import handle_chat
 from app.services.iris_service import handle_iris_webhook
 
@@ -20,6 +21,7 @@ async def list_rooms():
 async def add_room(room_id: int):
     settings.allowed_rooms.add(room_id)
     logger.info("Room added: %s", room_id)
+    record_audit("room_added", room_id=room_id)
     return {"allowed_rooms": sorted(settings.allowed_rooms)}
 
 
@@ -27,6 +29,7 @@ async def add_room(room_id: int):
 async def remove_room(room_id: int):
     settings.allowed_rooms.discard(room_id)
     logger.info("Room removed: %s", room_id)
+    record_audit("room_removed", room_id=room_id)
     return {"allowed_rooms": sorted(settings.allowed_rooms)}
 
 
