@@ -12,6 +12,7 @@ fetches a web image (Naver image search). Both return base64 for Iris /reply.
 from __future__ import annotations
 
 import base64
+import contextvars
 import io
 import time
 
@@ -28,6 +29,25 @@ _IMAGE_REF_WORDS = ("사진", "이미지", "그림", "짤", "방금거", "이거
 
 # room_id -> {"url": str, "ts": float}
 _recent_image: dict[int, dict] = {}
+
+# Per-request collector for images the LLM `generate_image` tool produces, so
+# handle_chat can surface them in its result and the Iris webhook can send them.
+_pending_images: contextvars.ContextVar = contextvars.ContextVar("pending_images", default=None)
+
+
+def start_image_collection() -> None:
+    _pending_images.set([])
+
+
+def collect_generated_image(b64: str) -> None:
+    lst = _pending_images.get()
+    if lst is not None and b64:
+        lst.append(b64)
+
+
+def take_generated_images() -> list[str]:
+    lst = _pending_images.get()
+    return list(lst) if lst else []
 
 
 def remember_room_image(room_id: int, url: str) -> None:
