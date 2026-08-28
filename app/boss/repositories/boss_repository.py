@@ -166,6 +166,46 @@ class BossRepository:
         with get_conn() as conn:
             conn.execute("UPDATE boss_schedule SET reminder_sent_at=? WHERE id=?", (now_iso, schedule_id))
 
+    def add_recurring_reminder(
+        self,
+        room_id: int,
+        fire_hour: int,
+        fire_minute: int,
+        template: str,
+        start_date: str,
+        created_by: str,
+        now_iso: str,
+    ) -> int:
+        with get_conn() as conn:
+            cur = conn.execute(
+                """
+                INSERT INTO recurring_reminder
+                (room_id, fire_hour, fire_minute, template, start_date, created_by, enabled, created_at, updated_at)
+                VALUES (?, ?, ?, ?, ?, ?, 1, ?, ?)
+                """,
+                (room_id, fire_hour, fire_minute, template, start_date, created_by, now_iso, now_iso),
+            )
+            return cur.lastrowid
+
+    def list_recurring_reminders(self, room_id: int):
+        with get_conn() as conn:
+            return conn.execute(
+                "SELECT * FROM recurring_reminder WHERE room_id=? AND enabled=1 ORDER BY fire_hour, fire_minute, id",
+                (room_id,),
+            ).fetchall()
+
+    def list_recurring_reminders_all(self):
+        with get_conn() as conn:
+            return conn.execute("SELECT * FROM recurring_reminder WHERE enabled=1").fetchall()
+
+    def disable_recurring_reminder(self, room_id: int, reminder_id: int, now_iso: str) -> bool:
+        with get_conn() as conn:
+            cur = conn.execute(
+                "UPDATE recurring_reminder SET enabled=0, updated_at=? WHERE id=? AND room_id=? AND enabled=1",
+                (now_iso, reminder_id, room_id),
+            )
+            return cur.rowcount > 0
+
     def get_scheduler_state(self, key: str):
         with get_conn() as conn:
             row = conn.execute("SELECT state_value FROM scheduler_state WHERE state_key=?", (key,)).fetchone()

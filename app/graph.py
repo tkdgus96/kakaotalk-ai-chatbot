@@ -14,15 +14,17 @@ from app.boss.utils.week import now_kst
 from app.chat_log import (
     get_cached_chat_summary,
     get_chat_log_between,
+    list_room_senders,
     search_chat_log,
     search_chat_log_evidence,
     search_chat_log_with_windows,
     set_cached_chat_summary,
 )
 from app.config import settings
-from app.dependencies import fact_extractor_llm, llm, user_profile_store, vectorstore
+from app.dependencies import fact_extractor_llm, light_llm, llm, user_profile_store, vectorstore
 from app.memory_policy import validate_memory_fact
 from app.persona import ensure_persona
+from app.room_topics import ensure_room_topics, get_room_topic_expansions
 from app.prompts import get_system_prompt
 from app.tools import tools
 
@@ -64,12 +66,14 @@ JSON으로만 답해. 다른 텍스트 금지.
 """
 
 llm_with_tools = llm.bind_tools(tools)
+light_llm_with_tools = light_llm.bind_tools(tools)
 
 
 class ChatState(TypedDict):
     messages: Annotated[list, add_messages]
     retrieved_context: str
     user_facts: str
+    mentioned_facts: str
     room_persona: str
     buffer_context: str
     room_id: int
@@ -245,8 +249,8 @@ async def _build_long_date_recap_context(
         return _build_date_recap_context(label, start, end, messages)
 
     date_label = start.strftime("%Y-%m-%d")
-    query_key = _date_summary_query_key(query)
-    relevant_raw = _select_relevant_raw_lines(messages, query, limit=80)
+    query_key = _date_summary_query_key(query, room_id)
+    relevant_raw = _select_relevant_raw_lines(messages, query, limit=80, room_id=room_id)
     if cached := get_cached_chat_summary(room_id, date_label, query_key):
         return (
             "사용자는 특정 날짜의 채팅방 대화를 근거로 답변을 요청했다.\n"
@@ -313,8 +317,10 @@ async def _build_long_date_recap_context(
     return context
 
 
-def _select_relevant_raw_lines(messages: list[str], query: str, limit: int = 80) -> list[str]:
-    terms = _focus_terms(query)
+def _select_relevant_raw_lines(
+    messages: list[str], query: str, limit: int = 80, room_id: int | None = None
+) -> list[str]:
+    terms = _focus_terms(query, room_id)
     if not terms:
         return []
     selected: list[str] = []
@@ -326,32 +332,48 @@ def _select_relevant_raw_lines(messages: list[str], query: str, limit: int = 80)
     return selected
 
 
-def _focus_terms(query: str) -> list[str]:
+# Fallback expansions until a room has LLM-computed topics (app/room_topics.py).
+# Room-specific entries here predate auto-extraction and can be removed once
+# the live rooms have a computed room_topics row.
+_SEED_EXPANSIONS = {
+    "검마": ["검마", "검은마법사"],
+    "루시드": ["루시드"],
+    "보스": ["보스", "검마", "루시드", "해방"],
+    "파파존스": ["파파존스", "존스페이버릿", "수퍼파파스", "아이리쉬", "포테이토"],
+    "메소": ["메소", "메소시세", "게임비트", "아이템매니아"],
+    "주가": ["주가", "삼성전자", "하이닉스", "코스피", "코스닥"],
+    "오사카": ["오사카", "교토", "일본", "여행", "금각사"],
+    "교토": ["교토", "오사카", "일본", "여행", "금각사"],
+    "정산": ["정산", "드랍"],
+    "드랍": ["드랍", "정산"],
+    "단어맞추기": ["단어맞추기", "인별", "기록", "챌린지"],
+}
+
+
+def _room_expansions(room_id: int | None) -> dict[str, list[str]]:
+    if room_id is None:
+        return _SEED_EXPANSIONS
+    return {**_SEED_EXPANSIONS, **get_room_topic_expansions(room_id)}
+
+
+def _focus_terms(query: str, room_id: int | None = None) -> list[str]:
     text = re.sub(r"^\[[^\]]+\]:\s*", "", query)
     terms = [tok for tok in re.findall(r"[0-9A-Za-z가-힣]+", text) if len(tok) >= 2]
-    expansions = {
-        "검마": ["검마", "검은마법사"],
-        "루시드": ["루시드"],
-        "보스": ["보스", "검마", "루시드", "해방"],
-        "파파존스": ["파파존스", "존스페이버릿", "수퍼파파스", "아이리쉬", "포테이토"],
-        "메소": ["메소", "메소시세", "게임비트", "아이템매니아"],
-        "주가": ["주가", "삼성전자", "하이닉스", "코스피", "코스닥"],
-        "오사카": ["오사카", "교토", "일본", "여행", "금각사"],
-        "교토": ["교토", "오사카", "일본", "여행", "금각사"],
-        "정산": ["정산", "드랍"],
-        "드랍": ["드랍", "정산"],
-        "단어맞추기": ["단어맞추기", "인별", "기록", "챌린지"],
-    }
+    expansions = _room_expansions(room_id)
     out: list[str] = []
     for term in terms:
         out.extend(expansions.get(term, [term]))
     return list(dict.fromkeys(out))[:30]
 
 
-def _date_summary_query_key(query: str) -> str:
+def _date_summary_query_key(query: str, room_id: int | None = None) -> str:
     text = re.sub(r"^\[[^\]]+\]:\s*", "", query.strip())
+    focus_words = set()
+    for key, terms in _room_expansions(room_id).items():
+        focus_words.add(key)
+        focus_words.update(terms)
     if any(word in text for word in ("요약", "정리", "알려줘")) and not any(
-        word in text for word in ("검마", "루시드", "주가", "메소", "파파존스", "여행", "오사카", "교토", "정산", "드랍")
+        word in text for word in focus_words
     ):
         return "general"
     terms = re.findall(r"[0-9A-Za-z가-힣]+", text)
@@ -416,10 +438,15 @@ async def retrieve(state: ChatState, config) -> dict:
             "sender": sender,
         }
 
-    recall_query = _augment_recall_query(query)
+    try:
+        await ensure_room_topics(room_id)
+    except Exception:
+        pass
+
+    recall_query = _augment_recall_query(query, room_id)
     wants_log_evidence = _asks_room_log_evidence(query)
     include_bot_evidence = _asks_bot_audit(query)
-    summary_docs, fact_texts, fts_hits, fts_windows, evidence_lines = await asyncio.gather(
+    summary_docs, fact_texts, fts_hits, fts_windows, evidence_lines, room_senders = await asyncio.gather(
         asyncio.to_thread(
             vectorstore.similarity_search,
             query,
@@ -437,7 +464,19 @@ async def retrieve(state: ChatState, config) -> dict:
             include_bot_evidence,
             include_bot_evidence,
         ),
+        asyncio.to_thread(list_room_senders, room_id),
     )
+
+    mentioned = _detect_mentioned_members(query, room_senders, sender)
+    mentioned_fact_lists = await asyncio.gather(
+        *(asyncio.to_thread(_load_user_facts, room_id, member) for member in mentioned)
+    )
+    mentioned_sections = [
+        f"[{member}에 대해 알려진 사실]\n" + "\n".join(f"- {t}" for t in facts)
+        for member, facts in zip(mentioned, mentioned_fact_lists)
+        if facts
+    ]
+    mentioned_facts = "\n\n".join(mentioned_sections)
 
     context_parts = []
     if summary_docs:
@@ -464,35 +503,44 @@ async def retrieve(state: ChatState, config) -> dict:
     return {
         "retrieved_context": context,
         "user_facts": user_facts,
+        "mentioned_facts": mentioned_facts,
         "room_persona": persona,
         "room_id": room_id,
         "sender": sender,
     }
 
 
-def _augment_recall_query(query: str) -> str:
+def _detect_mentioned_members(query: str, room_senders: list[str], sender: str, limit: int = 2) -> list[str]:
+    """Return other room members whose names appear in the query, so questions
+    like '허재승 알레르기 뭐였지?' can load that member's stored facts too."""
+    text = re.sub(r"^\[[^\]]+\]:\s*", "", query)
+    mentioned: list[str] = []
+    for name in room_senders:
+        if name == sender or len(name) < 2:
+            continue
+        if name in text:
+            mentioned.append(name)
+            if len(mentioned) >= limit:
+                break
+    return mentioned
+
+
+def _augment_recall_query(query: str, room_id: int | None = None) -> str:
     text = query.strip()
     additions: list[str] = []
+    # Bot-generic intents; room-specific topics come from _room_expansions below.
     if any(word in text for word in ("취향 기준", "방에서 나온 취향", "추천해줘")):
         additions.extend(["맛있", "추천", "좋아", "별로"])
-    if "파파존스" in text:
-        additions.extend(["파파존스", "존스페이버릿", "존페", "수퍼파파스", "아이리쉬", "포테이토"])
     if "온반봇" in text and any(word in text for word in ("불만", "욕", "문제", "틀린", "틀렸")):
         additions.extend(["온반봇", "깡통", "버러지", "구라", "멍청", "말투", "반존대", "잘못", "틀림"])
-    if "메소" in text and any(word in text for word in ("물어", "언제", "누가", "시세")):
-        additions.extend(["메소", "시세", "!메소", "!메소시세"])
     if "날씨" in text or "기온" in text:
         additions.extend(["날씨", "기온", "온반봇", "틀림", "잘못"])
-    if any(word in text for word in ("단어맞추기", "인별", "기록")):
-        additions.extend(["단어맞추기", "기록", "인별", "챌린지", "하루"])
-    if any(word in text for word in ("정산", "드랍")):
-        additions.extend(["정산", "드랍", "보스", "기능", "필요"])
-    if any(word in text for word in ("오사카", "교토", "일본", "여행")):
-        additions.extend(["오사카", "교토", "일본", "여행", "금각사"])
-    if any(word in text for word in ("검마", "루시드", "보스", "해방")):
-        additions.extend(["검마", "루시드", "보스", "해방", "같이", "오늘", "내일"])
+    for key, terms in _room_expansions(room_id).items():
+        if key in text:
+            additions.extend(terms)
     if not additions:
         return text
+    additions = list(dict.fromkeys(additions))
     return " ".join(additions) + " " + text
 
 
@@ -501,6 +549,7 @@ async def chat(state: ChatState) -> dict:
     room_id = state.get("room_id", settings.playground_room_id)
     context = state.get("retrieved_context", "")
     user_facts = state.get("user_facts", "")
+    mentioned_facts = state.get("mentioned_facts", "")
     persona = state.get("room_persona", "")
     query = _last_human_text(state["messages"])
 
@@ -523,6 +572,11 @@ async def chat(state: ChatState) -> dict:
             f"\n\n{sender}에 대해 알려진 사실 (선호/제약/신상). "
             f"답변할 때 이 사실들을 위반하지 말 것:\n{user_facts}"
         )
+    if mentioned_facts:
+        system_content += (
+            "\n\n질문에 언급된 다른 멤버에 대해 알려진 사실. 그 멤버에 대한 질문이면 "
+            f"이 사실들을 근거로 답하고, 없는 내용은 추측하지 말 것:\n{mentioned_facts}"
+        )
     if context:
         system_content += f"\n\n참고할 수 있는 이전 대화 내용:\n{context}"
     buffer_context = state.get("buffer_context", "")
@@ -532,11 +586,31 @@ async def chat(state: ChatState) -> dict:
     messages = [SystemMessage(content=system_content)] + list(state["messages"])
     if _should_answer_from_retrieved_context(query, context):
         response = await llm.ainvoke(messages)
+    elif settings.enable_model_routing and not _needs_full_model(query):
+        response = await light_llm_with_tools.ainvoke(messages)
     else:
         response = await llm_with_tools.ainvoke(messages)
     if not getattr(response, "tool_calls", None) and isinstance(response.content, str):
         response.content = _normalize_chat_output(response.content)
     return {"messages": [response]}
+
+
+_FULL_MODEL_HINTS = (
+    "주가", "주식", "코스피", "코스닥", "환율", "날씨", "기온", "뉴스", "검색", "시세",
+    "메소", "캐릭터", "보스", "정산", "드랍", "리마인더",
+    "요약", "정리", "비교", "번역", "계산", "추천", "분석", "설명", "알려줘",
+    "언제", "누가", "왜", "어떻게", "몇", "뭐였", "뭐라", "기억", "궁금",
+)
+
+
+def _needs_full_model(query: str) -> bool:
+    """Conservative router: only clearly-casual short small talk goes to the
+    light model; anything that smells like facts, tools, memory, or reasoning
+    stays on the full model."""
+    text = re.sub(r"^\[[^\]]+\]:\s*", "", query.strip())
+    if len(text) > 40:
+        return True
+    return any(word in text for word in _FULL_MODEL_HINTS)
 
 
 def _identity_answer(query: str, sender: str) -> str | None:

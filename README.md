@@ -187,6 +187,17 @@ Examples:
 - `!정산 검마 4`
 - `!정산완료 B105`
 
+## Daily Reminder Commands
+
+- `!매일 [HH:MM] [메시지]` — 매일 지정 시각에 방으로 메시지 발송. 메시지의 `{N}`은 등록일을 1일차로 하는 일차로 치환
+- `!매일목록`
+- `!매일해제 [id]`
+- `!매일도움`
+
+Examples:
+- `!매일 00:00 허재승 금주 {N}일차`
+- `!매일해제 3`
+
 ### Room management
 
 - `GET /rooms`
@@ -210,6 +221,15 @@ Delivery model:
 - Backend scheduler never sends KakaoTalk directly.
 - Scheduler writes reminders to `bot_outbox`.
 - Android Kakao script polls `/bot/outbox`, calls `Api.replyRoom(room_name, message)`, then `ack`.
+
+### Iris Bridge (redroid — phone replacement)
+
+- `POST /iris` — webhook target for the [Iris](https://github.com/dolidolih/Iris) bridge; converts
+  the payload to `KakaoMsg` and runs the same pipeline. Replies go back via Iris `POST /reply`.
+- `GET /iris/rooms` — current `chat_id -> room_id` mapping (`IRIS_ROOM_MAP` 작성용).
+- `ENABLE_IRIS_SENDER=true` — the backend delivers `bot_outbox` rows itself through Iris
+  (replaces phone polling; exact-time delivery for `!매일` reminders).
+- Setup guide: `deploy/iris/README.md` (redroid compose, kernel prereqs, room_id 연속성 매핑, 전환 절차).
 
 ## Tests
 

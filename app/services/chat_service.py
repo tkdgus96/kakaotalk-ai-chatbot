@@ -12,6 +12,7 @@ from app.dependencies import boss_service, llm, logger, message_buffers, vectors
 from app.graph import graph
 from app.models import KakaoMsg
 from app.prompts import FILTER_SYSTEM_PROMPT, SUMMARIZE_SYSTEM_PROMPT
+from app.services.reminder_service import handle_recurring_command
 
 
 async def flush_buffer(room_id: int):
@@ -63,6 +64,8 @@ async def handle_chat(data: KakaoMsg):
     if parsed:
         logger.info("parsed_command room_id=%s name=%s args=%r", data.room_id, parsed.name, parsed.args)
         answer = handle_boss_command(data.room_id, data.sender, parsed.name, parsed.args)
+        if answer is None:
+            answer = handle_recurring_command(data.room_id, data.sender, parsed.name, parsed.args)
         if answer is not None:
             return {"answer": answer}
     elif data.msg.strip().startswith(("!", "！")):
