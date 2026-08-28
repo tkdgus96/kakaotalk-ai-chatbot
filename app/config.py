@@ -75,6 +75,7 @@ class Settings:
     chat_per_min_limit: int
     chat_log_retention_days: int
     admin_room_id: int
+    bot_shared_token: str | None
     max_crawl_urls: int
     crawl_timeout: float
     enable_js: bool
@@ -136,6 +137,7 @@ settings = Settings(
     chat_per_min_limit=int(os.getenv("CHAT_PER_MIN_LIMIT", "8")),
     chat_log_retention_days=int(os.getenv("CHAT_LOG_RETENTION_DAYS", "0")),
     admin_room_id=int(os.getenv("ADMIN_ROOM_ID", "0")),
+    bot_shared_token=os.getenv("BOT_SHARED_TOKEN") or None,
     max_crawl_urls=int(os.getenv("MAX_CRAWL_URLS", "3")),
     crawl_timeout=float(os.getenv("CRAWL_TIMEOUT", "10")),
     enable_js=os.getenv("ENABLE_JS", "true").lower() in {"1", "true", "yes", "on"},
