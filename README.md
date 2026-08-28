@@ -65,6 +65,11 @@ main.py                 # FastAPI entrypoint (uvicorn main:app)
 python3 -m venv .venv
 source .venv/bin/activate
 pip install -r requirements.txt
+
+# Web crawling (news / URL reading / web fallbacks) needs the Playwright browser.
+# Without this, crawl4ai fails with "Executable doesn't exist ... chrome-headless-shell".
+.venv/bin/playwright install chromium chromium-headless-shell
+sudo .venv/bin/playwright install-deps chromium   # system libs (Linux)
 ```
 
 ### 2) Configure environment
