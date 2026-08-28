@@ -59,8 +59,10 @@ class ParseWebhookTests(unittest.TestCase):
         self.assertIsNone(parse_iris_webhook("json 아님"))
 
     def test_command_and_self_detection(self):
+        # Default trigger is "!" (and fullwidth "！") only.
         self.assertTrue(is_command_message("!보스도움"))
-        self.assertTrue(is_command_message("온반봇 오늘 날씨 어때"))
+        self.assertTrue(is_command_message("！날씨"))
+        self.assertFalse(is_command_message("온반봇 오늘 날씨 어때"))
         self.assertFalse(is_command_message("그냥 잡담"))
 
         payload = {"msg": "답장", "room": "방", "sender": "온반봇", "json": {"chat_id": 1}}
