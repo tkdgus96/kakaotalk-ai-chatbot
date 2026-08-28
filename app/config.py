@@ -57,6 +57,20 @@ class Settings:
     iris_room_map_seed: str
     enable_iris_sender: bool
     iris_sender_interval_seconds: int
+    health_heartbeat_minutes: int
+    health_self_chat_id: int
+    health_iris_fail_threshold: int
+    health_kakao_fail_threshold: int
+    smtp_host: str | None
+    smtp_port: int
+    smtp_user: str | None
+    smtp_password: str | None
+    smtp_starttls: bool
+    alert_email_from: str | None
+    alert_email_to: str | None
+    openai_admin_key: str | None
+    cost_report_hour: int
+    enable_health_monitor: bool
     max_crawl_urls: int
     crawl_timeout: float
     enable_js: bool
@@ -100,6 +114,20 @@ settings = Settings(
     iris_room_map_seed=os.getenv("IRIS_ROOM_MAP", ""),
     enable_iris_sender=os.getenv("ENABLE_IRIS_SENDER", "false").lower() in {"1", "true", "yes", "on"},
     iris_sender_interval_seconds=int(os.getenv("IRIS_SENDER_INTERVAL_SECONDS", "5")),
+    health_heartbeat_minutes=int(os.getenv("HEALTH_HEARTBEAT_MINUTES", "30")),
+    health_self_chat_id=int(os.getenv("HEALTH_SELF_CHAT_ID", "0")),
+    health_iris_fail_threshold=int(os.getenv("HEALTH_IRIS_FAIL_THRESHOLD", "3")),
+    health_kakao_fail_threshold=int(os.getenv("HEALTH_KAKAO_FAIL_THRESHOLD", "2")),
+    smtp_host=os.getenv("SMTP_HOST") or None,
+    smtp_port=int(os.getenv("SMTP_PORT", "587")),
+    smtp_user=os.getenv("SMTP_USER") or None,
+    smtp_password=os.getenv("SMTP_PASSWORD") or None,
+    smtp_starttls=os.getenv("SMTP_STARTTLS", "true").lower() in {"1", "true", "yes", "on"},
+    alert_email_from=os.getenv("ALERT_EMAIL_FROM") or None,
+    alert_email_to=os.getenv("ALERT_EMAIL_TO") or None,
+    openai_admin_key=os.getenv("OPENAI_ADMIN_KEY") or None,
+    cost_report_hour=int(os.getenv("COST_REPORT_HOUR", "9")),
+    enable_health_monitor=os.getenv("ENABLE_HEALTH_MONITOR", "true").lower() in {"1", "true", "yes", "on"},
     max_crawl_urls=int(os.getenv("MAX_CRAWL_URLS", "3")),
     crawl_timeout=float(os.getenv("CRAWL_TIMEOUT", "10")),
     enable_js=os.getenv("ENABLE_JS", "true").lower() in {"1", "true", "yes", "on"},
