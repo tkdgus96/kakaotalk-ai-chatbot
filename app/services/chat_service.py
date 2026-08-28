@@ -13,6 +13,7 @@ from app.graph import graph
 from app.models import KakaoMsg
 from app.prompts import FILTER_SYSTEM_PROMPT, SUMMARIZE_SYSTEM_PROMPT
 from app.services.reminder_service import handle_recurring_command
+from app.services.image_service import handle_image_command, maybe_answer_with_image
 
 
 async def flush_buffer(room_id: int):
@@ -68,12 +69,25 @@ async def handle_chat(data: KakaoMsg):
             answer = handle_recurring_command(data.room_id, data.sender, parsed.name, parsed.args)
         if answer is not None:
             return {"answer": answer}
+        img_result = await handle_image_command(parsed.name, parsed.args)
+        if img_result is not None:
+            text, images = img_result
+            return {"answer": text, "images": images}
     elif data.msg.strip().startswith(("!", "！")):
         logger.info("Command-like message not parsed: room_id=%s raw=%r", data.room_id, data.msg)
 
     if data.room_id not in settings.allowed_rooms:
         logger.info("New chatroom detected: '%s' (sender: %s)", data.room_id, data.sender)
         return {"answer": ""}
+
+    # A command that refers to a recently posted photo -> answer via vision.
+    if data.is_command:
+        vision_answer = await maybe_answer_with_image(data.room_id, data.msg)
+        if vision_answer:
+            await asyncio.to_thread(
+                add_chat_log, data.room_id, data.sender, data.msg, datetime.now().isoformat()
+            )
+            return {"answer": vision_answer}
 
     await asyncio.to_thread(
         add_chat_log, data.room_id, data.sender, data.msg, datetime.now().isoformat()
