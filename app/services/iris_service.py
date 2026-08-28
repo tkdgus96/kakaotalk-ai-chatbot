@@ -204,23 +204,16 @@ class IrisClient:
             return False
 
     async def send_images_b64(self, chat_id: int, b64_list: list[str]) -> bool:
-        """Send multiple images in one message (Iris type=image_multiple)."""
+        """Send images one-by-one with spacing. image_multiple in one call tends
+        to drop all but one in this KakaoTalk/Iris build, so we send serially."""
         if not b64_list:
             return False
-        if len(b64_list) == 1:
-            return await self.send_image_b64(chat_id, b64_list[0])
-        try:
-            async with httpx.AsyncClient(timeout=60.0) as client:
-                res = await client.post(
-                    f"{self.base_url}/reply",
-                    json={"type": "image_multiple", "room": str(chat_id), "data": b64_list},
-                )
-            if res.status_code != 200:
-                logger.warning("iris image_multiple status=%s chat_id=%s", res.status_code, chat_id)
-            return res.status_code == 200
-        except Exception as e:
-            logger.warning("iris image_multiple failed chat_id=%s err=%s", chat_id, e)
-            return False
+        ok_any = False
+        for i, b64 in enumerate(b64_list):
+            if i:
+                await asyncio.sleep(0.7)
+            ok_any = await self.send_image_b64(chat_id, b64) or ok_any
+        return ok_any
 
 
 async def handle_iris_webhook(payload: object) -> dict:
@@ -257,6 +250,9 @@ async def handle_iris_webhook(payload: object) -> dict:
     if answer:
         sent = await client.send_text(message.chat_id, answer)
     if images:
+        # Back-to-back sends race in Iris/KakaoTalk and silently drop; space them.
+        if answer:
+            await asyncio.sleep(0.7)
         sent = await client.send_images_b64(message.chat_id, images) or sent
     return {"ok": True, "handled": True, "sent": sent}
 
