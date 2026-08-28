@@ -13,6 +13,7 @@ from __future__ import annotations
 
 import base64
 import io
+import re
 import time
 
 import httpx
@@ -64,6 +65,25 @@ def get_recent_room_image(room_id: int) -> str | None:
 
 def references_image(text: str) -> bool:
     return any(w in text for w in _IMAGE_REF_WORDS)
+
+
+# "<묘사> 그려줘/생성해줘/만들어줘" 형태를 결정론적으로 잡아 프롬프트만 추출.
+# LLM 도구 선택은 히스토리에 휩쓸려 누락되기도 해서, 이 경로로 확실히 생성한다.
+_GEN_TAIL_RE = re.compile(
+    r"\s*(사진|그림|이미지|짤)?\s*(좀|하나|한\s*장)?\s*"
+    r"(그려\s*줘|그려\s*봐|그려\s*줄래|그려|생성\s*해\s*줘|생성\s*해|만들어\s*줘|만들어)\s*[.!~ㅋ？?]*$"
+)
+
+
+def detect_image_generation(msg: str) -> str | None:
+    """Return the image prompt if `msg` is a '<desc> 그려줘' style request, else None."""
+    text = msg.strip()
+    if text and text[0] in "!！":
+        text = text[1:].strip()
+    if not _GEN_TAIL_RE.search(text):
+        return None
+    prompt = _GEN_TAIL_RE.sub("", text).strip()
+    return prompt or None
 
 
 async def _download_bytes(url: str, timeout: float = 20.0) -> tuple[bytes, str] | None:
