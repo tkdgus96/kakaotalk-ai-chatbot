@@ -14,6 +14,7 @@ from app.models import KakaoMsg
 from app.prompts import FILTER_SYSTEM_PROMPT, SUMMARIZE_SYSTEM_PROMPT
 from app.services.reminder_service import handle_recurring_command
 from app.services.image_service import (
+    IMAGE_COMMANDS,
     detect_image_generation,
     generate_image_b64,
     handle_image_command,
@@ -21,6 +22,7 @@ from app.services.image_service import (
     start_image_collection,
     take_generated_images,
 )
+from app.services.usage_service import allow_chat, allow_image_gen
 
 
 async def flush_buffer(room_id: int):
@@ -76,10 +78,13 @@ async def handle_chat(data: KakaoMsg):
             answer = handle_recurring_command(data.room_id, data.sender, parsed.name, parsed.args)
         if answer is not None:
             return {"answer": answer}
-        img_result = await handle_image_command(parsed.name, parsed.args)
-        if img_result is not None:
-            text, images = img_result
-            return {"answer": text, "images": images}
+        if parsed.name in IMAGE_COMMANDS:
+            if not allow_image_gen(data.sender, settings.image_gen_daily_limit):
+                return {"answer": f"오늘 이미지는 여기까지야 (하루 {settings.image_gen_daily_limit}장). 내일 다시 해줘!"}
+            img_result = await handle_image_command(parsed.name, parsed.args)
+            if img_result is not None:
+                text, images = img_result
+                return {"answer": text, "images": images}
     elif data.msg.strip().startswith(("!", "！")):
         logger.info("Command-like message not parsed: room_id=%s raw=%r", data.room_id, data.msg)
 
@@ -95,6 +100,8 @@ async def handle_chat(data: KakaoMsg):
             await asyncio.to_thread(
                 add_chat_log, data.room_id, data.sender, data.msg, datetime.now().isoformat()
             )
+            if not allow_image_gen(data.sender, settings.image_gen_daily_limit):
+                return {"answer": f"오늘 이미지는 여기까지야 (하루 {settings.image_gen_daily_limit}장). 내일 다시 해줘!"}
             b64 = await generate_image_b64(gen_prompt)
             if b64:
                 return {"answer": f"🎨 '{gen_prompt}' 그려봤어", "images": [b64]}
@@ -117,6 +124,11 @@ async def handle_chat(data: KakaoMsg):
         message_buffers[data.room_id].append(f"[{data.sender}]: {data.msg}")
         if len(message_buffers[data.room_id]) >= settings.buffer_size:
             await flush_buffer(data.room_id)
+        return {"answer": ""}
+
+    # Per-room chat throttle: protect against spam-driven LLM cost.
+    if not allow_chat(data.room_id, settings.chat_per_min_limit):
+        logger.info("chat throttled room_id=%s", data.room_id)
         return {"answer": ""}
 
     history = SQLChatMessageHistory(

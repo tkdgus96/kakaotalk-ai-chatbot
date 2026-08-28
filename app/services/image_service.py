@@ -144,6 +144,9 @@ async def describe_image(url: str, question: str) -> str | None:
                 )
             ]
         )
+        from app.services.usage_service import record_message_usage
+
+        record_message_usage(resp, "vision", "gpt-4o")
         return resp.content if isinstance(resp.content, str) else str(resp.content)
     except Exception as e:
         logger.warning("vision describe failed: %s", e)
@@ -179,6 +182,9 @@ async def generate_image_b64(prompt: str) -> str | None:
             model=settings.image_gen_model, prompt=prompt, size="1024x1024", n=1
         )
         item = res.data[0]
+        from app.services.usage_service import record_image_usage
+
+        record_image_usage(settings.image_gen_model)
         b64 = getattr(item, "b64_json", None)
         if b64:
             return _to_send_jpeg_b64(base64.b64decode(b64))

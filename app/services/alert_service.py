@@ -89,18 +89,30 @@ async def fetch_openai_spend_usd(days: int = 1) -> float | None:
 
 
 async def send_cost_report() -> bool:
-    """Email the recent OpenAI spend. No official 'remaining balance' API exists,
-    so we report spend (last 24h + last 7d)."""
-    day = await fetch_openai_spend_usd(1)
-    week = await fetch_openai_spend_usd(7)
-    if day is None and week is None:
-        logger.info("cost report skipped (no admin key / costs unavailable)")
-        return False
+    """Email recent OpenAI spend. Uses our own usage tracking (always available)
+    and, if an Admin key is set, the authoritative Costs API too. No official
+    'remaining balance' API exists, so we report spend, not balance."""
+    from app.services.usage_service import spend_breakdown, spend_since_usd
+
+    tracked_day = spend_since_usd(1)
+    tracked_week = spend_since_usd(7)
+    admin_day = await fetch_openai_spend_usd(1)
+    admin_week = await fetch_openai_spend_usd(7)
+
     lines = ["OpenAI 사용액 리포트", ""]
-    if day is not None:
-        lines.append(f"- 최근 24시간: ${day:.2f}")
-    if week is not None:
-        lines.append(f"- 최근 7일: ${week:.2f}")
+    lines.append("[자체 추적 추정]")
+    lines.append(f"- 최근 24시간: ${tracked_day:.3f}")
+    lines.append(f"- 최근 7일: ${tracked_week:.3f}")
+    breakdown = spend_breakdown(1)
+    if breakdown:
+        lines.append("- 24시간 종류별: " + ", ".join(f"{k} ${v:.3f}" for k, v in breakdown))
+    if admin_day is not None or admin_week is not None:
+        lines.append("")
+        lines.append("[OpenAI 청구 기준(Admin API)]")
+        if admin_day is not None:
+            lines.append(f"- 최근 24시간: ${admin_day:.2f}")
+        if admin_week is not None:
+            lines.append(f"- 최근 7일: ${admin_week:.2f}")
     lines.append("")
     lines.append("※ OpenAI는 '남은 잔액' API를 제공하지 않아 사용액만 표시합니다.")
     return await send_alert("일일 사용액 리포트", "\n".join(lines))

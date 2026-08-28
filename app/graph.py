@@ -586,10 +586,19 @@ async def chat(state: ChatState) -> dict:
     messages = [SystemMessage(content=system_content)] + list(state["messages"])
     if _should_answer_from_retrieved_context(query, context):
         response = await llm.ainvoke(messages)
+        used_model = "gpt-4o"
     elif settings.enable_model_routing and not _needs_full_model(query):
         response = await light_llm_with_tools.ainvoke(messages)
+        used_model = settings.light_model
     else:
         response = await llm_with_tools.ainvoke(messages)
+        used_model = "gpt-4o"
+    try:
+        from app.services.usage_service import record_message_usage
+
+        record_message_usage(response, "chat", used_model, room_id, sender)
+    except Exception:
+        pass
     if not getattr(response, "tool_calls", None) and isinstance(response.content, str):
         response.content = _normalize_chat_output(response.content)
     return {"messages": [response]}
