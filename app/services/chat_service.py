@@ -13,7 +13,12 @@ from app.graph import graph
 from app.models import KakaoMsg
 from app.prompts import FILTER_SYSTEM_PROMPT, SUMMARIZE_SYSTEM_PROMPT
 from app.services.reminder_service import handle_recurring_command
-from app.services.image_service import handle_image_command, maybe_answer_with_image
+from app.services.image_service import (
+    handle_image_command,
+    maybe_answer_with_image,
+    start_image_collection,
+    take_generated_images,
+)
 
 
 async def flush_buffer(room_id: int):
@@ -117,6 +122,7 @@ async def handle_chat(data: KakaoMsg):
     recent_buffer = message_buffers.get(data.room_id, [])
     buffer_context = "\n".join(recent_buffer) if recent_buffer else ""
 
+    start_image_collection()
     result = await graph.ainvoke(
         {
             "messages": graph_messages,
@@ -134,6 +140,9 @@ async def handle_chat(data: KakaoMsg):
     history.add_user_message(f"[{data.sender}]: {data.msg}")
     history.add_ai_message(answer)
 
+    images = take_generated_images()
+    if images:
+        return {"answer": answer, "images": images}
     return {"answer": answer}
 
 

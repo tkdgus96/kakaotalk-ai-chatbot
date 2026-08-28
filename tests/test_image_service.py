@@ -63,6 +63,20 @@ class ImageRefAndCacheTests(unittest.TestCase):
         self.assertEqual(img._strip_command_prefix("！그림 설명"), "그림 설명")
 
 
+class GeneratedImageCollectionTests(unittest.TestCase):
+    def test_collect_and_take(self):
+        img.start_image_collection()
+        self.assertEqual(img.take_generated_images(), [])
+        img.collect_generated_image("AAA")
+        img.collect_generated_image("BBB")
+        self.assertEqual(img.take_generated_images(), ["AAA", "BBB"])
+
+    def test_collect_without_start_is_noop(self):
+        img._pending_images.set(None)
+        img.collect_generated_image("AAA")  # should not raise
+        self.assertEqual(img.take_generated_images(), [])
+
+
 class ImageCommandUsageTests(unittest.IsolatedAsyncioTestCase):
     async def test_usage_messages_without_network(self):
         text, imgs = await img.handle_image_command("!그림", [])
