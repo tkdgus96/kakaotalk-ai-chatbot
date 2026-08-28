@@ -33,17 +33,24 @@ async def naver_search(query: str) -> str:
 
 @tool
 async def web_search(query: str) -> str:
-    """글로벌 웹 검색 (Tavily). 영어 검색어, 해외 기업·인물·제품·이벤트·기술·학술 정보,
-    글로벌 시사·환율·코인·해외 스포츠 등에 사용하세요.
-    네이버 검색에서 정보가 부족한 한국 주제도 보조로 사용 가능합니다.
-    한국 콘텐츠는 가능하면 naver_search를 우선 호출하세요."""
+    """글로벌/사실 웹 검색. 해외 기업·인물·제품·기술·시사, 최신 사건·실적·수치 등
+    정확도가 중요한 질문에 사용하세요. 기본적으로 OpenAI 웹검색으로 출처(인용)까지 붙여
+    최신·정확하게 답합니다. 한국 당일 뉴스는 naver_search를 우선 쓰세요."""
+    # Primary: grounded search (OpenAI web_search) — recency + citations.
+    from app.tools.grounded_search import grounded_web_answer
+
+    grounded = await grounded_web_answer(query)
+    if grounded:
+        return grounded
+
+    # Fallback: Tavily + crawl.
     if not search_service.is_web_available():
-        return "Tavily API 키가 설정되어 있지 않습니다. (TAVILY_API_KEY)"
+        return "웹 검색을 사용할 수 없습니다. (검색 키 미설정)"
     try:
         results = await search_service.search_web(query)
         docs = await crawl_service.crawl_many([result.url for result in results[: settings.max_crawl_urls]])
     except Exception as exc:
-        return f"Tavily 검색 중 오류: {exc}"
+        return f"웹 검색 중 오류: {exc}"
 
     if not results:
         return "검색 결과가 없습니다."
