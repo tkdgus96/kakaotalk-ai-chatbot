@@ -76,6 +76,8 @@ class Settings:
     chat_log_retention_days: int
     admin_room_id: int
     bot_shared_token: str | None
+    enable_grounded_search: bool
+    web_search_model: str
     max_crawl_urls: int
     crawl_timeout: float
     enable_js: bool
@@ -138,6 +140,8 @@ settings = Settings(
     chat_log_retention_days=int(os.getenv("CHAT_LOG_RETENTION_DAYS", "0")),
     admin_room_id=int(os.getenv("ADMIN_ROOM_ID", "0")),
     bot_shared_token=os.getenv("BOT_SHARED_TOKEN") or None,
+    enable_grounded_search=os.getenv("ENABLE_GROUNDED_SEARCH", "true").lower() in {"1", "true", "yes", "on"},
+    web_search_model=os.getenv("WEB_SEARCH_MODEL", "gpt-4o"),
     max_crawl_urls=int(os.getenv("MAX_CRAWL_URLS", "3")),
     crawl_timeout=float(os.getenv("CRAWL_TIMEOUT", "10")),
     enable_js=os.getenv("ENABLE_JS", "true").lower() in {"1", "true", "yes", "on"},
