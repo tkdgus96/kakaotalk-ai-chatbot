@@ -430,26 +430,36 @@ async def retrieve(state: ChatState, config) -> dict:
     recall_query = _augment_recall_query(query, room_id)
     wants_log_evidence = _asks_room_log_evidence(query)
     include_bot_evidence = _asks_bot_audit(query)
-    summary_docs, fact_texts, fts_hits, fts_windows, evidence_lines, room_senders = await asyncio.gather(
-        asyncio.to_thread(
-            vectorstore.similarity_search,
-            query,
-            k=settings.rag_search_k,
-            filter={"$and": [{"room_id": str(room_id)}, {"role": "context_summary"}]},
-        ),
+    needs_recall = _needs_recall(query)
+
+    # Always cheap: this user's facts (constraints) + room member list.
+    # Heavy past-chat recall (semantic summaries, FTS, windows, evidence) is
+    # only fetched when the question actually calls for memory — otherwise it's
+    # noise that distracts factual/current/chit-chat answers (and costs latency).
+    fact_texts, room_senders = await asyncio.gather(
         asyncio.to_thread(_load_user_facts, room_id, sender),
-        asyncio.to_thread(search_chat_log, room_id, recall_query, 10),
-        asyncio.to_thread(search_chat_log_with_windows, room_id, recall_query, 5, 5, 5),
-        asyncio.to_thread(
-            search_chat_log_evidence,
-            room_id,
-            recall_query,
-            25,
-            include_bot_evidence,
-            include_bot_evidence,
-        ),
         asyncio.to_thread(list_room_senders, room_id),
     )
+    summary_docs, fts_hits, fts_windows, evidence_lines = [], [], [], []
+    if needs_recall:
+        summary_docs, fts_hits, fts_windows, evidence_lines = await asyncio.gather(
+            asyncio.to_thread(
+                vectorstore.similarity_search,
+                query,
+                k=settings.rag_search_k,
+                filter={"$and": [{"room_id": str(room_id)}, {"role": "context_summary"}]},
+            ),
+            asyncio.to_thread(search_chat_log, room_id, recall_query, 10),
+            asyncio.to_thread(search_chat_log_with_windows, room_id, recall_query, 5, 5, 5),
+            asyncio.to_thread(
+                search_chat_log_evidence,
+                room_id,
+                recall_query,
+                25,
+                include_bot_evidence,
+                include_bot_evidence,
+            ),
+        )
 
     mentioned = _detect_mentioned_members(query, room_senders, sender)
     mentioned_fact_lists = await asyncio.gather(
@@ -673,6 +683,23 @@ def _asks_room_log_evidence(query: str) -> bool:
 def _asks_bot_audit(query: str) -> bool:
     text = re.sub(r"^\[[^\]]+\]:\s*", "", query.strip())
     return "온반봇" in text and any(word in text for word in ("불만", "욕", "문제", "틀렸", "못한", "평가", "개선"))
+
+
+_RECALL_MARKERS = (
+    "기억", "저번", "예전", "전에", "아까", "지난번", "말했", "했잖아", "얘기했",
+    "추천", "취향", "우리", "누가", "언제",
+)
+
+
+def _needs_recall(query: str) -> bool:
+    """Whether past-chat memory is relevant. Factual/current/chit-chat questions
+    don't need it (and are hurt by the noise), so we skip heavy recall for them."""
+    text = re.sub(r"^\[[^\]]+\]:\s*", "", query.strip())
+    return (
+        _asks_room_log_evidence(text)
+        or _mentions_chat_context(text)
+        or any(w in text for w in _RECALL_MARKERS)
+    )
 
 
 def _should_answer_from_retrieved_context(query: str, context: str) -> bool:
