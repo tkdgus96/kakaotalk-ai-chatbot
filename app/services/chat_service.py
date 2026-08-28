@@ -24,6 +24,8 @@ from app.services.image_service import (
 )
 from app.services.usage_service import allow_chat, allow_image_gen
 from app.services.memory_service import handle_memory_command
+from app.services.game_stats import handle_game_command
+from app.services.summary_service import handle_summary_command
 
 
 async def flush_buffer(room_id: int):
@@ -75,6 +77,8 @@ def _help_text() -> str:
         "• 이미지 검색: !이미지 [검색어]\n"
         "• 사진 이해: 사진 올린 뒤 !이 사진 뭐야\n"
         "• 기억: !기억 / !기억삭제 [키워드] / !기억끄기 / !기억켜기\n"
+        "• 대화 요약: !요약 [오늘|어제|N일]\n"
+        "• 게임 랭킹: !기록 / !단어기록 / !챌린지기록 / !내기록 (기간: 주/월/오늘)\n"
         "• 보스: !보스도움\n"
         "• 매일 알림: !매일도움"
     )
@@ -92,6 +96,10 @@ async def handle_chat(data: KakaoMsg):
             answer = handle_recurring_command(data.room_id, data.sender, parsed.name, parsed.args)
         if answer is None:
             answer = handle_memory_command(data.room_id, data.sender, parsed.name, parsed.args)
+        if answer is None:
+            answer = handle_game_command(data.room_id, data.sender, parsed.name, parsed.args)
+        if answer is None:
+            answer = await handle_summary_command(data.room_id, parsed.name, parsed.args)
         if answer is None and parsed.name == "!도움말":
             answer = _help_text()
         if answer is not None:
