@@ -12,7 +12,6 @@ from app.dependencies import boss_service, llm, logger, message_buffers, vectors
 from app.graph import graph
 from app.models import KakaoMsg
 from app.prompts import FILTER_SYSTEM_PROMPT, SUMMARIZE_SYSTEM_PROMPT
-from app.services.reminder_service import handle_recurring_command
 from app.services.image_service import (
     IMAGE_COMMANDS,
     detect_image_generation,
@@ -81,8 +80,7 @@ def _help_text() -> str:
         "• 대화 요약: !요약 [오늘|어제|N일]\n"
         "• 게임 랭킹: !기록 / !단어기록 / !챌린지기록 / !내기록 (기간: 주/월/오늘)\n"
         "• 보스: !보스도움\n"
-        "• 매일 알림(고정): !매일도움\n"
-        "• 반복/예약 알림: 그냥 '매일 아침 8시에 날씨 알려줘'처럼 말하면 등록돼"
+        "• 반복/예약 알림: 그냥 '매일 아침 8시에 날씨 알려줘', '매주 월요일 9시에 ~' 처럼 말하면 등록돼"
     )
 
 
@@ -94,8 +92,6 @@ async def handle_chat(data: KakaoMsg):
     if parsed:
         logger.info("parsed_command room_id=%s name=%s args=%r", data.room_id, parsed.name, parsed.args)
         answer = handle_boss_command(data.room_id, data.sender, parsed.name, parsed.args)
-        if answer is None:
-            answer = handle_recurring_command(data.room_id, data.sender, parsed.name, parsed.args)
         if answer is None:
             answer = handle_memory_command(data.room_id, data.sender, parsed.name, parsed.args)
         if answer is None:
