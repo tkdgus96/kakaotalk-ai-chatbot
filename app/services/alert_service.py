@@ -115,4 +115,17 @@ async def send_cost_report() -> bool:
             lines.append(f"- 최근 7일: ${admin_week:.2f}")
     lines.append("")
     lines.append("※ OpenAI는 '남은 잔액' API를 제공하지 않아 사용액만 표시합니다.")
+
+    try:
+        from app.services.feedback_service import recent_feedback
+
+        fb = recent_feedback(1)
+        if fb:
+            lines.append("")
+            lines.append(f"[사용자 오답 지적 {len(fb)}건 (최근 24h)]")
+            for f in fb[:5]:
+                q = (f.get("prev_question") or "").replace("\n", " ")[:40]
+                lines.append(f"- {f.get('sender')}: \"{f.get('correction','')[:30]}\" (질문: {q})")
+    except Exception:
+        pass
     return await send_alert("일일 사용액 리포트", "\n".join(lines))

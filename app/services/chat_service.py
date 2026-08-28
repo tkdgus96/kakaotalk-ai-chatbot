@@ -26,6 +26,7 @@ from app.services.usage_service import allow_chat, allow_image_gen
 from app.services.memory_service import handle_memory_command
 from app.services.game_stats import handle_game_command
 from app.services.summary_service import handle_summary_command
+from app.services.feedback_service import maybe_log_correction
 
 
 async def flush_buffer(room_id: int):
@@ -145,6 +146,9 @@ async def handle_chat(data: KakaoMsg):
     await asyncio.to_thread(
         add_chat_log, data.room_id, data.sender, data.msg, datetime.now().isoformat()
     )
+
+    # Feedback loop: capture corrections that directly follow a bot answer.
+    await asyncio.to_thread(maybe_log_correction, data.room_id, data.sender, data.msg)
 
     if not data.is_command:
         message_buffers[data.room_id].append(f"[{data.sender}]: {data.msg}")
