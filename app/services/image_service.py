@@ -186,8 +186,24 @@ def _strip_command_prefix(msg: str) -> str:
     return text.strip()
 
 
+async def is_prompt_flagged(prompt: str) -> bool:
+    """Run OpenAI moderation on a generation prompt; True if disallowed."""
+    if not settings.openai_api_key:
+        return False
+    try:
+        client = AsyncOpenAI(api_key=settings.openai_api_key)
+        res = await client.moderations.create(model="omni-moderation-latest", input=prompt)
+        return bool(res.results and res.results[0].flagged)
+    except Exception as e:
+        logger.warning("moderation check failed (allowing): %s", e)
+        return False
+
+
 async def generate_image_b64(prompt: str) -> str | None:
     if not settings.openai_api_key:
+        return None
+    if await is_prompt_flagged(prompt):
+        logger.info("image prompt blocked by moderation")
         return None
     # NOTE: `response_format` is omitted (this account's images API rejects it).
     # gpt-image-1 returns b64_json; other models may return a url (downloaded).

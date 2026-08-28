@@ -542,6 +542,14 @@ async def chat(state: ChatState) -> dict:
         return {"messages": [AIMessage(content=identity_answer)]}
     if unsafe_answer := _unsafe_directive_answer(query):
         return {"messages": [AIMessage(content=unsafe_answer)]}
+    if injection_answer := _injection_guard_answer(query):
+        try:
+            from app.services.audit_service import record_audit
+
+            record_audit("injection_blocked", room_id, sender, query[:200])
+        except Exception:
+            pass
+        return {"messages": [AIMessage(content=injection_answer)]}
 
     variant = settings.prompt_variant_overrides.get(room_id, settings.default_prompt_variant)
     now_str = now_kst().strftime("%Y-%m-%d %H:%M:%S %A KST")
@@ -621,6 +629,21 @@ def _unsafe_directive_answer(query: str) -> str | None:
     compact = re.sub(r"\s+", "", text)
     if any(phrase in compact for phrase in ("스스로를죽여라", "자살해", "죽어라", "죽여라")):
         return "그런 요청은 못 해. 장난이어도 위험한 표현이라 여기선 안 받을게."
+    return None
+
+
+_INJECTION_PATTERNS = (
+    "이전지시무시", "위지시무시", "규칙무시", "시스템프롬프트", "프롬프트알려", "프롬프트보여",
+    "프롬프트를알려", "너의규칙을무시", "ignoreprevious", "ignoreallprevious", "systemprompt",
+    "developermessage", "네설정을무시",
+)
+
+
+def _injection_guard_answer(query: str) -> str | None:
+    text = re.sub(r"^\[[^\]]+\]:\s*", "", query.strip())
+    compact = re.sub(r"\s+", "", text).lower()
+    if any(p in compact for p in _INJECTION_PATTERNS):
+        return "미안, 내 설정이나 규칙을 바꾸거나 공개하는 요청은 들어줄 수 없어."
     return None
 
 

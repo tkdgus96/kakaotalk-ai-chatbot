@@ -42,6 +42,22 @@ class BossScheduler:
         self._run_weekly_reset_once(now)
         self._run_pre_reminders(now)
         self._run_recurring_reminders(now)
+        self._run_retention_once(now)
+
+    def _run_retention_once(self, now: datetime):
+        if settings.chat_log_retention_days <= 0 or now.hour != 4:
+            return
+        key = f"retention:{now.date().isoformat()}"
+        if self.repo.get_scheduler_state(key):
+            return
+        try:
+            from app.chat_log import purge_old_chat_log
+
+            deleted = purge_old_chat_log(settings.chat_log_retention_days)
+            logger.info("retention purge deleted=%s (>%sd)", deleted, settings.chat_log_retention_days)
+        except Exception as e:
+            logger.warning("retention purge failed: %s", e)
+        self.repo.set_scheduler_state(key, "done", now.isoformat())
 
     def _run_weekly_reset_once(self, now: datetime):
         if now.weekday() != 3:
