@@ -38,6 +38,35 @@ class IrisMessage:
     room_name: str
     sender: str
     msg: str
+    image_urls: tuple[str, ...] = ()
+
+
+def _extract_image_urls(msg_type, attachment) -> list[str]:
+    """Pull signed CDN photo URLs from a decrypted attachment.
+    type 2 = single photo ({"url": ...}); type 71 = multi-photo
+    ({"C": {"THL": [{"TH": {"THU": url}}...]}} or {"imageUrls": [...]})."""
+    if isinstance(attachment, str):
+        try:
+            attachment = jsonlib.loads(attachment)
+        except Exception:
+            return []
+    if not isinstance(attachment, dict):
+        return []
+    urls: list[str] = []
+    if attachment.get("url"):
+        urls.append(str(attachment["url"]))
+    for key in ("imageUrls", "urls"):
+        vals = attachment.get(key)
+        if isinstance(vals, list):
+            urls.extend(str(v) for v in vals if v)
+    thl = (attachment.get("C") or {}).get("THL") if isinstance(attachment.get("C"), dict) else None
+    if isinstance(thl, list):
+        for item in thl:
+            u = ((item or {}).get("TH") or {}).get("THU") or ((item or {}).get("SL") or {}).get("SLU")
+            if u:
+                urls.append(str(u))
+    seen: set[str] = set()
+    return [u for u in urls if not (u in seen or seen.add(u))]
 
 
 def parse_iris_webhook(payload: object) -> IrisMessage | None:
@@ -61,9 +90,14 @@ def parse_iris_webhook(payload: object) -> IrisMessage | None:
     msg = str(payload.get("msg") or raw.get("message") or "").strip()
     sender = str(payload.get("sender") or "").strip()
     room_name = str(payload.get("room") or "").strip()
-    if not msg or not sender:
+    image_urls = tuple(_extract_image_urls(raw.get("type"), raw.get("attachment")))
+    if not sender:
         return None
-    return IrisMessage(chat_id=chat_id, room_name=room_name, sender=sender, msg=msg)
+    if not msg and not image_urls:
+        return None
+    return IrisMessage(
+        chat_id=chat_id, room_name=room_name, sender=sender, msg=msg, image_urls=image_urls
+    )
 
 
 def is_self_message(message: IrisMessage) -> bool:
@@ -154,24 +188,45 @@ class IrisClient:
             logger.warning("iris /reply failed chat_id=%s err=%s", chat_id, e)
             return False
 
+    async def send_image_b64(self, chat_id: int, b64: str) -> bool:
+        """Send one image. `b64` is raw base64 (no data: prefix), per Iris /reply."""
+        try:
+            async with httpx.AsyncClient(timeout=30.0) as client:
+                res = await client.post(
+                    f"{self.base_url}/reply",
+                    json={"type": "image", "room": str(chat_id), "data": b64},
+                )
+            if res.status_code != 200:
+                logger.warning("iris image /reply status=%s chat_id=%s", res.status_code, chat_id)
+            return res.status_code == 200
+        except Exception as e:
+            logger.warning("iris image /reply failed chat_id=%s err=%s", chat_id, e)
+            return False
+
+    async def send_images_b64(self, chat_id: int, b64_list: list[str]) -> bool:
+        """Send multiple images in one message (Iris type=image_multiple)."""
+        if not b64_list:
+            return False
+        if len(b64_list) == 1:
+            return await self.send_image_b64(chat_id, b64_list[0])
+        try:
+            async with httpx.AsyncClient(timeout=60.0) as client:
+                res = await client.post(
+                    f"{self.base_url}/reply",
+                    json={"type": "image_multiple", "room": str(chat_id), "data": b64_list},
+                )
+            if res.status_code != 200:
+                logger.warning("iris image_multiple status=%s chat_id=%s", res.status_code, chat_id)
+            return res.status_code == 200
+        except Exception as e:
+            logger.warning("iris image_multiple failed chat_id=%s err=%s", chat_id, e)
+            return False
+
 
 async def handle_iris_webhook(payload: object) -> dict:
     # Import here: chat_service must stay importable without the Iris stack.
     from app.services.chat_service import handle_chat
-
-    # TEMP capture: log decrypted attachment format for photo messages (type 2/71)
-    # so we can implement image handling against the real payload shape.
-    if isinstance(payload, dict):
-        raw = payload.get("json") or {}
-        if isinstance(raw, str):
-            try:
-                raw = jsonlib.loads(raw)
-            except Exception:
-                raw = {}
-        if isinstance(raw, dict) and str(raw.get("type")) in ("2", "71", "27", "18", "26"):
-            logger.info(
-                "IRIS_MEDIA type=%s attachment=%.1500s", raw.get("type"), str(raw.get("attachment"))
-            )
+    from app.services.image_service import remember_room_image
 
     message = parse_iris_webhook(payload)
     if message is None:
@@ -181,6 +236,11 @@ async def handle_iris_webhook(payload: object) -> dict:
         return {"ok": True, "handled": False}
 
     room_id, room_name = await asyncio.to_thread(resolve_room, message.chat_id, message.room_name)
+
+    # Cache the latest photo so a following "!이 사진 …" command can be answered.
+    if message.image_urls:
+        remember_room_image(room_id, message.image_urls[0])
+
     data = KakaoMsg(
         room_id=room_id,
         room=room_name or str(message.chat_id),
@@ -190,9 +250,14 @@ async def handle_iris_webhook(payload: object) -> dict:
     )
     result = await handle_chat(data)
     answer = (result or {}).get("answer") or ""
-    if not answer:
-        return {"ok": True, "handled": True, "sent": False}
-    sent = await IrisClient().send_text(message.chat_id, answer)
+    images = (result or {}).get("images") or []
+
+    client = IrisClient()
+    sent = False
+    if answer:
+        sent = await client.send_text(message.chat_id, answer)
+    if images:
+        sent = await client.send_images_b64(message.chat_id, images) or sent
     return {"ok": True, "handled": True, "sent": sent}
 
 
