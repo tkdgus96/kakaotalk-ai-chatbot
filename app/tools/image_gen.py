@@ -2,6 +2,7 @@ from langchain_core.runnables import RunnableConfig
 from langchain_core.tools import tool
 
 from app.config import settings
+from app.dependencies import logger
 from app.services.image_service import collect_generated_image, generate_image_b64
 
 
@@ -17,6 +18,7 @@ async def generate_image(prompt: str, config: RunnableConfig) -> str:
     (이미지를 텍스트로 다시 묘사하지 마)."""
     room_id = (config or {}).get("configurable", {}).get("room_id", settings.playground_room_id)
     b64 = await generate_image_b64(prompt)
+    logger.info("generate_image room_id=%s b64_len=%s", room_id, len(b64) if b64 else 0)
     if not b64:
         return "이미지 생성에 실패했어. 잠시 후 다시 시도해줘."
     collect_generated_image(int(room_id), b64)
