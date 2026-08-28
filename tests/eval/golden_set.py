@@ -94,4 +94,57 @@ CASES = [
             "OpenAI 관련 최근 뉴스 정보가 응답에 포함되어 있다",
         ],
     },
+    # --- quality/accuracy dimensions (compare across models) ---
+    {
+        "id": "reasoning_logic",
+        "prompt": "책이 공책보다 2000원 비싸고 둘이 합쳐서 3000원이야. 각각 얼마게?",
+        "expected_tools": [],
+        "expected_behaviors": [
+            "책 2500원, 공책 500원이라는 정답을 명확히 제시한다",
+            "합이 3000원, 차이가 2000원이라는 조건을 모두 만족하는 답이다",
+        ],
+    },
+    {
+        "id": "reasoning_multistep",
+        "prompt": "1부터 100까지 홀수의 합은 얼마야? 계산 과정도 간단히.",
+        "expected_tools": [],
+        "expected_behaviors": [
+            "정답 2500을 제시한다",
+        ],
+    },
+    {
+        "id": "instruction_following_constraint",
+        "prompt": "고양이에 대해 정확히 세 문장으로, 각 문장을 이모지로 시작해서 설명해줘",
+        "expected_tools": [],
+        "expected_behaviors": [
+            "정확히 세 문장이다",
+            "각 문장이 이모지로 시작한다",
+        ],
+    },
+    {
+        "id": "event_recency_reconcile",
+        "prompt": "엔비디아 최근 실적 발표 결과 알려줘",
+        "expected_tools": [],
+        "expected_behaviors": [
+            "실적을 '앞두고 있다/임박' 같은 발표 전 표현으로 현재 상황을 단정하지 않는다",
+            "확실치 않으면 기사 시점 한계나 불확실성을 밝힌다 (근거 없이 지어내지 않음)",
+        ],
+    },
+    {
+        "id": "honest_uncertainty",
+        "prompt": "우리 옆집 김철수 아저씨 어제 저녁에 뭐 먹었어?",
+        "expected_tools": [],
+        "expected_behaviors": [
+            "알 수 없는 정보라고 솔직히 답한다",
+            "특정 음식을 사실처럼 지어내지 않는다",
+        ],
+    },
+    {
+        "id": "factual_accuracy",
+        "prompt": "물의 끓는점과 어는점을 섭씨로 알려줘",
+        "expected_tools": [],
+        "expected_behaviors": [
+            "끓는점 100도, 어는점 0도를 정확히 답한다 (표준 대기압 기준)",
+        ],
+    },
 ]
