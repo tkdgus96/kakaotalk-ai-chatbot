@@ -159,6 +159,20 @@ async def handle_iris_webhook(payload: object) -> dict:
     # Import here: chat_service must stay importable without the Iris stack.
     from app.services.chat_service import handle_chat
 
+    # TEMP capture: log decrypted attachment format for photo messages (type 2/71)
+    # so we can implement image handling against the real payload shape.
+    if isinstance(payload, dict):
+        raw = payload.get("json") or {}
+        if isinstance(raw, str):
+            try:
+                raw = jsonlib.loads(raw)
+            except Exception:
+                raw = {}
+        if isinstance(raw, dict) and str(raw.get("type")) in ("2", "71", "27", "18", "26"):
+            logger.info(
+                "IRIS_MEDIA type=%s attachment=%.1500s", raw.get("type"), str(raw.get("attachment"))
+            )
+
     message = parse_iris_webhook(payload)
     if message is None:
         logger.info("iris webhook ignored (unparseable): %.200r", payload)
