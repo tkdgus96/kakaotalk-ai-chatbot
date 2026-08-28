@@ -23,6 +23,7 @@ from app.services.image_service import (
     take_generated_images,
 )
 from app.services.usage_service import allow_chat, allow_image_gen
+from app.services.memory_service import handle_memory_command
 
 
 async def flush_buffer(room_id: int):
@@ -66,6 +67,19 @@ async def summarize_history(messages):
     return response.content
 
 
+def _help_text() -> str:
+    return (
+        "[온반봇 명령어]\n"
+        "• 대화/질문: 메시지 앞에 ! (예: !오늘 날씨, !삼성전자 주가)\n"
+        "• 이미지 생성: !그림 [설명] 또는 !<설명> 그려줘\n"
+        "• 이미지 검색: !이미지 [검색어]\n"
+        "• 사진 이해: 사진 올린 뒤 !이 사진 뭐야\n"
+        "• 기억: !기억 / !기억삭제 [키워드] / !기억끄기 / !기억켜기\n"
+        "• 보스: !보스도움\n"
+        "• 매일 알림: !매일도움"
+    )
+
+
 async def handle_chat(data: KakaoMsg):
     boss_service.touch_room(data.room_id, data.room)
     logger.info("chat_in room_id=%s is_command=%s msg=%r", data.room_id, data.is_command, data.msg)
@@ -76,6 +90,10 @@ async def handle_chat(data: KakaoMsg):
         answer = handle_boss_command(data.room_id, data.sender, parsed.name, parsed.args)
         if answer is None:
             answer = handle_recurring_command(data.room_id, data.sender, parsed.name, parsed.args)
+        if answer is None:
+            answer = handle_memory_command(data.room_id, data.sender, parsed.name, parsed.args)
+        if answer is None and parsed.name == "!도움말":
+            answer = _help_text()
         if answer is not None:
             return {"answer": answer}
         if parsed.name in IMAGE_COMMANDS:

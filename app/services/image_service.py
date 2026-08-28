@@ -161,7 +161,22 @@ async def maybe_answer_with_image(room_id: int, msg: str) -> str | None:
     if not url:
         return None
     question = _strip_command_prefix(msg)
-    return await describe_image(url, question)
+    answer = await describe_image(url, question)
+    if answer:
+        # Remember what the photo showed so it's searchable later ("저번 그 사진").
+        try:
+            import asyncio
+
+            from app.boss.utils.week import now_kst
+            from app.chat_log import add_chat_log
+
+            summary = answer[:300].replace("\n", " ")
+            await asyncio.to_thread(
+                add_chat_log, room_id, "온반봇", f"[사진 설명] {summary}", now_kst().isoformat()
+            )
+        except Exception:
+            pass
+    return answer
 
 
 def _strip_command_prefix(msg: str) -> str:

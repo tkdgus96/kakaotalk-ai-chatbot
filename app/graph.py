@@ -332,28 +332,12 @@ def _select_relevant_raw_lines(
     return selected
 
 
-# Fallback expansions until a room has LLM-computed topics (app/room_topics.py).
-# Room-specific entries here predate auto-extraction and can be removed once
-# the live rooms have a computed room_topics row.
-_SEED_EXPANSIONS = {
-    "검마": ["검마", "검은마법사"],
-    "루시드": ["루시드"],
-    "보스": ["보스", "검마", "루시드", "해방"],
-    "파파존스": ["파파존스", "존스페이버릿", "수퍼파파스", "아이리쉬", "포테이토"],
-    "메소": ["메소", "메소시세", "게임비트", "아이템매니아"],
-    "주가": ["주가", "삼성전자", "하이닉스", "코스피", "코스닥"],
-    "오사카": ["오사카", "교토", "일본", "여행", "금각사"],
-    "교토": ["교토", "오사카", "일본", "여행", "금각사"],
-    "정산": ["정산", "드랍"],
-    "드랍": ["드랍", "정산"],
-    "단어맞추기": ["단어맞추기", "인별", "기록", "챌린지"],
-}
-
-
+# Query-term expansions are now learned per room (app/room_topics.py), computed
+# weekly from each room's own logs — no hardcoded room-specific dictionaries.
 def _room_expansions(room_id: int | None) -> dict[str, list[str]]:
     if room_id is None:
-        return _SEED_EXPANSIONS
-    return {**_SEED_EXPANSIONS, **get_room_topic_expansions(room_id)}
+        return {}
+    return get_room_topic_expansions(room_id)
 
 
 def _focus_terms(query: str, room_id: int | None = None) -> list[str]:
@@ -696,8 +680,11 @@ async def store(state: ChatState) -> dict:
             break
 
     if last_human:
-        content = last_human.content if isinstance(last_human.content, str) else str(last_human.content)
-        await _extract_and_store_user_facts(content, room_id, sender, now)
+        from app.services.memory_service import is_opted_out
+
+        if not await asyncio.to_thread(is_opted_out, room_id, sender):
+            content = last_human.content if isinstance(last_human.content, str) else str(last_human.content)
+            await _extract_and_store_user_facts(content, room_id, sender, now)
     return {}
 
 
