@@ -211,8 +211,10 @@ def _search_chat_log_like_rows(
     terms = _like_terms(query, include_term_prefixes=include_term_prefixes)
     if not terms:
         return []
-    clauses = " OR ".join("content LIKE ?" for _ in terms[:8])
-    params = [f"%{term}%" for term in terms[:8]]
+    # instr() instead of LIKE: on SQLite < 3.41 (e.g. Ubuntu 22.04's 3.37),
+    # LIKE on an FTS5 virtual table silently returns no rows.
+    clauses = " OR ".join("instr(content, ?) > 0" for _ in terms[:8])
+    params = list(terms[:8])
     try:
         with get_conn() as conn:
             return conn.execute(
@@ -303,8 +305,9 @@ def _search_chat_log_like(room_id: int, query: str, limit: int) -> list[str]:
     terms = [tok for tok in re.findall(r"[0-9A-Za-z가-힣]+", query) if len(tok) >= 2]
     if not terms:
         return []
-    clauses = " OR ".join("content LIKE ?" for _ in terms[:5])
-    params = [f"%{term}%" for term in terms[:5]]
+    # instr() instead of LIKE — see _search_chat_log_like_rows.
+    clauses = " OR ".join("instr(content, ?) > 0" for _ in terms[:5])
+    params = list(terms[:5])
     try:
         with get_conn() as conn:
             rows = conn.execute(
