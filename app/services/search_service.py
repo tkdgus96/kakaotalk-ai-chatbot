@@ -26,6 +26,18 @@ def strip_html(text: str | None) -> str:
     return re.sub(r"<[^>]+>", "", text or "")
 
 
+_TIME_SENSITIVE_WORDS = (
+    "실적", "발표", "결과", "출시", "오늘", "어제", "최근", "방금", "속보", "뉴스",
+    "주가", "시세", "환율", "코인", "경기", "스코어", "당첨", "예정", "일정",
+    "earnings", "results", "today", "latest", "breaking",
+)
+
+
+def _is_time_sensitive(query: str) -> bool:
+    q = query.lower()
+    return any(w in q for w in _TIME_SENSITIVE_WORDS)
+
+
 class SearchService:
     def __init__(
         self,
@@ -84,12 +96,15 @@ class SearchService:
             logger.info("tavily_search_unavailable missing_credentials=true")
             return []
 
-        result = await self._tavily.search(
-            query=query,
-            search_depth="advanced",
-            max_results=limit,
-            include_answer=False,
-        )
+        # Time-sensitive queries (earnings, results, launches, "today/recent")
+        # get the news topic + a recency window so we don't surface stale
+        # pre-event preview articles as if current.
+        kwargs = dict(query=query, search_depth="advanced", max_results=limit, include_answer=False)
+        if _is_time_sensitive(query):
+            kwargs["topic"] = "news"
+            kwargs["days"] = 14
+
+        result = await self._tavily.search(**kwargs)
         results = []
         for item in result.get("results", [])[:limit]:
             url = item.get("url") or ""
@@ -101,6 +116,7 @@ class SearchService:
                     title=item.get("title") or "",
                     url=url,
                     snippet=(item.get("content") or "")[:1200],
+                    published_at=item.get("published_date") or None,
                     metadata={"score": item.get("score")},
                 )
             )
