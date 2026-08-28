@@ -2,14 +2,15 @@
 #
 # 사전 조건 (호스트 리눅스, deploy/iris/README.md 참고):
 #   1) binder 커널 모듈:  sudo modprobe binder_linux devices="binder,hwbinder,vndbinder"
-#   2) x86_64 호스트면 카카오톡(ARM 네이티브)을 위해 ARM 변환 레이어가 포함된
-#      이미지가 필요 → redroid-script(libndk)로 커스텀 이미지를 만들고 image: 를 교체.
-#      (https://github.com/ayasa520/redroid-script)
+#   2) x86_64/AMD 호스트: 카카오톡은 arm64 네이티브 + minSdk 32(안드12L 이상)라서
+#      "안드로이드 13 + ARM 변환" 이미지가 필요하다. AMD은 houdini(인텔전용) 불가 →
+#      erstt/redroid의 ChromeOS 기반 ndk 변환 이미지를 쓴다. (redroid-script의 libndk는
+#      안드11/12 전용이라 안드13 카톡에서 크래시함 — 실사용 확인됨.)
 #
 # 포트는 전부 127.0.0.1 바인딩 — Iris HTTP API는 무인증이므로 외부에 열지 말 것.
 services:
   redroid:
-    image: redroid/redroid:11.0.0_ndk_magisk # redroid-script -a 11.0.0 -n -m 로 빌드 (AMD=libndk)
+    image: erstt/redroid:13.0.0_ndk_magisk_ChromeOS # 안드13 + ChromeOS ARM변환 + Magisk 루트
     container_name: iris-redroid
     privileged: true
     restart: unless-stopped

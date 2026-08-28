@@ -42,9 +42,27 @@ BACKEND_URL=http://172.17.0.1:8000 ./setup.sh
 > `docker-compose`(하이픈)로 실행할 것. docker 데몬 접근에 sudo가 필요하면 `sudo docker-compose ...`.
 > (sang을 docker 그룹에 넣어뒀으므로 재로그인 후에는 sudo 없이 가능.)
 
-> **x86_64/AMD 이미지**: 이미 `redroid/redroid:11.0.0_ndk_magisk`를 빌드해 두었다
-> (`redroid-script -a 11.0.0 -n -m`, AMD이므로 houdini 아닌 **libndk**). compose의 image가 이걸 가리킨다.
-> ABI 목록에 arm64-v8a가 잡히는 것으로 ARM 변환 동작을 확인함.
+> **x86_64/AMD 이미지 (중요)**: 카카오톡은 arm64 네이티브 + **minSdk 32(안드로이드 12L 이상)**라서
+> 안드11/12로는 설치조차 안 된다. 그리고 redroid-script의 libndk 변환은 안드11/12 전용이라
+> 안드13에 억지로 넣으면 카톡이 `libndk_translation.so`에서 네이티브 크래시한다(실사용 확인).
+> AMD은 houdini(인텔전용)도 불가. → **`erstt/redroid:13.0.0_ndk_magisk_ChromeOS`**
+> (안드13 + ChromeOS 기반 ARM 변환 + Magisk 루트)를 쓴다. compose가 이 이미지를 가리킨다.
+> `docker pull erstt/redroid:13.0.0_ndk_magisk_ChromeOS` 후 `docker-compose up -d`.
+> ABI 목록에 arm64-v8a가 잡히고 카톡이 정상 실행되는 것으로 ARM 변환 동작을 확인함.
+
+## 재부팅 자동 복구 (systemd)
+
+컨테이너는 `restart: unless-stopped`로 부팅 시 자동 기동되지만, 그 안의 KakaoTalk 실행과
+Iris(app_process) 기동은 별도로 해줘야 한다. `iris-autostart.sh` + `iris-bridge.service`가 이를 담당:
+
+```bash
+sudo cp iris-bridge.service /etc/systemd/system/iris-bridge.service
+sudo systemctl daemon-reload && sudo systemctl enable --now iris-bridge.service
+```
+
+스크립트는 안드로이드 boot_completed 대기 → 카톡 실행 → Iris 기동(이미 떠 있으면 skip)을 수행한다.
+Iris는 `web_server_endpoint` 등 설정을 기기에 저장하므로 재기동해도 웹훅 연결이 유지된다.
+`sang` 사용자 홈 경로가 하드코딩되어 있으니 다른 환경이면 두 파일의 경로를 고칠 것.
 
 카톡 로그인은 수동 (scrcpy로 화면 연결, **반드시 봇 전용 서브계정**):
 ```bash
