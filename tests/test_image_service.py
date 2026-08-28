@@ -64,17 +64,23 @@ class ImageRefAndCacheTests(unittest.TestCase):
 
 
 class GeneratedImageCollectionTests(unittest.TestCase):
-    def test_collect_and_take(self):
-        img.start_image_collection()
-        self.assertEqual(img.take_generated_images(), [])
-        img.collect_generated_image("AAA")
-        img.collect_generated_image("BBB")
-        self.assertEqual(img.take_generated_images(), ["AAA", "BBB"])
+    def tearDown(self):
+        img._generated_by_room.clear()
 
-    def test_collect_without_start_is_noop(self):
-        img._pending_images.set(None)
-        img.collect_generated_image("AAA")  # should not raise
-        self.assertEqual(img.take_generated_images(), [])
+    def test_collect_and_take_by_room(self):
+        img.start_image_collection(7)
+        img.collect_generated_image(7, "AAA")
+        img.collect_generated_image(7, "BBB")
+        self.assertEqual(img.take_generated_images(7), ["AAA", "BBB"])
+        # take clears it
+        self.assertEqual(img.take_generated_images(7), [])
+
+    def test_rooms_are_isolated(self):
+        img.start_image_collection(1)
+        img.start_image_collection(2)
+        img.collect_generated_image(1, "A")
+        self.assertEqual(img.take_generated_images(2), [])
+        self.assertEqual(img.take_generated_images(1), ["A"])
 
 
 class ImageCommandUsageTests(unittest.IsolatedAsyncioTestCase):

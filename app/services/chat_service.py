@@ -122,7 +122,7 @@ async def handle_chat(data: KakaoMsg):
     recent_buffer = message_buffers.get(data.room_id, [])
     buffer_context = "\n".join(recent_buffer) if recent_buffer else ""
 
-    start_image_collection()
+    start_image_collection(data.room_id)
     result = await graph.ainvoke(
         {
             "messages": graph_messages,
@@ -140,7 +140,7 @@ async def handle_chat(data: KakaoMsg):
     history.add_user_message(f"[{data.sender}]: {data.msg}")
     history.add_ai_message(answer)
 
-    images = take_generated_images()
+    images = take_generated_images(data.room_id)
     if images:
         return {"answer": answer, "images": images}
     return {"answer": answer}
