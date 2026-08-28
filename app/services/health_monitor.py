@@ -43,8 +43,27 @@ class HealthMonitor:
         self._last_alert_at = 0.0
         self._last_cost_report_date = ""
 
+    def _load_last_heartbeat(self) -> None:
+        """Restore last heartbeat time across restarts so redeploys don't
+        re-fire an immediate heartbeat each time."""
+        try:
+            val = self.repo.get_scheduler_state("health:last_heartbeat")
+            if val:
+                self._last_heartbeat = float(val)
+        except Exception:
+            pass
+
+    def _save_last_heartbeat(self) -> None:
+        try:
+            self.repo.set_scheduler_state(
+                "health:last_heartbeat", str(self._last_heartbeat), now_kst().isoformat()
+            )
+        except Exception:
+            pass
+
     async def run_forever(self):
         self._running = True
+        self._load_last_heartbeat()
         # Grace period so redroid/Iris can come up after a reboot.
         await asyncio.sleep(30)
         while self._running:
@@ -65,6 +84,7 @@ class HealthMonitor:
         kakao_ok = True
         if iris_ok and self._due_heartbeat():
             self._last_heartbeat = time.time()
+            self._save_last_heartbeat()
             kakao_ok = await self._heartbeat_roundtrip()
             self._kakao_fails = 0 if kakao_ok else self._kakao_fails + 1
 
