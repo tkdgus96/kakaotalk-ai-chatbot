@@ -14,6 +14,23 @@ from app.dependencies import boss_repo
 
 RECURRING_COMMANDS = {"!매일", "!매일목록", "!매일해제", "!매일도움"}
 
+
+async def generate_briefing(room_id: int, query: str) -> str:
+    """Run the query through the full agent graph (tools + web search) and
+    return the answer text — used to produce dynamic recurring briefings."""
+    from langchain_core.messages import AIMessage, HumanMessage
+
+    from app.graph import graph
+
+    result = await graph.ainvoke(
+        {"messages": [HumanMessage(content=query)]},
+        config={"configurable": {"room_id": room_id, "sender": "브리핑"}},
+    )
+    for m in reversed(result["messages"]):
+        if isinstance(m, AIMessage) and m.content and not getattr(m, "tool_calls", None):
+            return m.content if isinstance(m.content, str) else str(m.content)
+    return ""
+
 USAGE = (
     "[매일 리마인더 사용법]\n\n"
     "1) 등록\n"
@@ -74,11 +91,18 @@ def handle_recurring_command(room_id: int, sender: str, name: str, args: list[st
         if not rows:
             return "등록된 매일 리마인더가 없습니다."
         now = now_kst()
-        lines = [
-            f"- #{r['id']} 매일 {int(r['fire_hour']):02d}:{int(r['fire_minute']):02d} → "
-            f"{render_recurring_message(r['template'], r['start_date'], now)}"
-            for r in rows
-        ]
+        lines = []
+        for r in rows:
+            is_dyn = False
+            try:
+                is_dyn = bool(r["dynamic"])
+            except (KeyError, IndexError):
+                pass
+            tag = "[동적] " if is_dyn else ""
+            body = r["template"] if is_dyn else render_recurring_message(r["template"], r["start_date"], now)
+            lines.append(
+                f"- #{r['id']} 매일 {int(r['fire_hour']):02d}:{int(r['fire_minute']):02d} {tag}→ {body}"
+            )
         return "[매일 리마인더 목록]\n" + "\n".join(lines)
 
     if name == "!매일해제":

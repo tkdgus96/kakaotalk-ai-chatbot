@@ -175,17 +175,26 @@ class BossRepository:
         start_date: str,
         created_by: str,
         now_iso: str,
+        dynamic: int = 0,
+        days_of_week: str = "",
     ) -> int:
         with get_conn() as conn:
             cur = conn.execute(
                 """
                 INSERT INTO recurring_reminder
-                (room_id, fire_hour, fire_minute, template, start_date, created_by, enabled, created_at, updated_at)
-                VALUES (?, ?, ?, ?, ?, ?, 1, ?, ?)
+                (room_id, fire_hour, fire_minute, template, start_date, created_by, enabled, dynamic, days_of_week, created_at, updated_at)
+                VALUES (?, ?, ?, ?, ?, ?, 1, ?, ?, ?, ?)
                 """,
-                (room_id, fire_hour, fire_minute, template, start_date, created_by, now_iso, now_iso),
+                (room_id, fire_hour, fire_minute, template, start_date, created_by, dynamic, days_of_week, now_iso, now_iso),
             )
             return cur.lastrowid
+
+    def outbox_dedup_exists(self, dedup_key: str) -> bool:
+        with get_conn() as conn:
+            row = conn.execute(
+                "SELECT 1 FROM bot_outbox WHERE dedup_key=? LIMIT 1", (dedup_key,)
+            ).fetchone()
+        return row is not None
 
     def list_recurring_reminders(self, room_id: int):
         with get_conn() as conn:
