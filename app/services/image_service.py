@@ -12,6 +12,7 @@ fetches a web image (Naver image search). Both return base64 for Iris /reply.
 from __future__ import annotations
 
 import base64
+import io
 import time
 
 import httpx
@@ -47,19 +48,44 @@ def references_image(text: str) -> bool:
     return any(w in text for w in _IMAGE_REF_WORDS)
 
 
-async def _download_b64(url: str, timeout: float = 20.0) -> tuple[str, str] | None:
-    """Download a URL and return (base64, mime). None on failure."""
+async def _download_bytes(url: str, timeout: float = 20.0) -> tuple[bytes, str] | None:
+    """Download a URL and return (bytes, mime). None on failure."""
     try:
         async with httpx.AsyncClient(timeout=timeout, follow_redirects=True) as client:
             res = await client.get(url)
         if res.status_code != 200 or not res.content:
             logger.warning("image download failed status=%s url=%.80s", res.status_code, url)
             return None
-        mime = res.headers.get("content-type", "image/jpeg").split(";")[0]
-        return base64.b64encode(res.content).decode(), mime
+        return res.content, res.headers.get("content-type", "image/jpeg").split(";")[0]
     except Exception as e:
         logger.warning("image download error url=%.80s err=%s", url, e)
         return None
+
+
+async def _download_b64(url: str, timeout: float = 20.0) -> tuple[str, str] | None:
+    """Download a URL and return (base64, mime) — used for vision input."""
+    got = await _download_bytes(url, timeout)
+    if not got:
+        return None
+    raw, mime = got
+    return base64.b64encode(raw).decode(), mime
+
+
+def _to_send_jpeg_b64(raw: bytes, max_dim: int = 1280, quality: int = 85) -> str:
+    """Re-encode to a reasonably sized JPEG for reliable KakaoTalk delivery.
+    Large PNGs (gpt-image-1) / news photos can silently fail to send otherwise.
+    Falls back to raw base64 if Pillow can't decode it."""
+    try:
+        from PIL import Image
+
+        im = Image.open(io.BytesIO(raw)).convert("RGB")
+        im.thumbnail((max_dim, max_dim))
+        buf = io.BytesIO()
+        im.save(buf, format="JPEG", quality=quality)
+        return base64.b64encode(buf.getvalue()).decode()
+    except Exception as e:
+        logger.warning("image compress failed, sending raw: %s", e)
+        return base64.b64encode(raw).decode()
 
 
 async def describe_image(url: str, question: str) -> str | None:
@@ -107,14 +133,25 @@ def _strip_command_prefix(msg: str) -> str:
 async def generate_image_b64(prompt: str) -> str | None:
     if not settings.openai_api_key:
         return None
+    # NOTE: `response_format` is omitted (this account's images API rejects it).
+    # gpt-image-1 returns b64_json; other models may return a url (downloaded).
     try:
         client = AsyncOpenAI(api_key=settings.openai_api_key)
         res = await client.images.generate(
-            model="dall-e-3", prompt=prompt, size="1024x1024", n=1, response_format="b64_json"
+            model=settings.image_gen_model, prompt=prompt, size="1024x1024", n=1
         )
-        return res.data[0].b64_json
+        item = res.data[0]
+        b64 = getattr(item, "b64_json", None)
+        if b64:
+            return _to_send_jpeg_b64(base64.b64decode(b64))
+        url = getattr(item, "url", None)
+        if url:
+            got = await _download_bytes(url)
+            if got:
+                return _to_send_jpeg_b64(got[0])
+        return None
     except Exception as e:
-        logger.warning("dalle generate failed: %s", e)
+        logger.warning("image generate failed: %s", e)
         return None
 
 
@@ -138,9 +175,9 @@ async def search_web_image_b64(query: str) -> str | None:
             link = item.get("link")
             if not link:
                 continue
-            got = await _download_b64(link)
+            got = await _download_bytes(link)
             if got:
-                return got[0]
+                return _to_send_jpeg_b64(got[0])
         return None
     except Exception as e:
         logger.warning("naver image search failed: %s", e)

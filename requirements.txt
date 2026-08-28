@@ -16,3 +16,6 @@ langgraph-cli[inmem]
 
 # Optional content retrieval layer. The app degrades gracefully if missing.
 crawl4ai
+
+# Image processing (outgoing image compression for Iris send)
+Pillow
