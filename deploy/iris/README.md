@@ -37,6 +37,15 @@ cd deploy/iris
 BACKEND_URL=http://172.17.0.1:8000 ./setup.sh
 ```
 
+> **compose 버전 주의**: 이 호스트(192.168.0.51)에는 compose v2 플러그인이 없고
+> 레거시 `docker-compose` v1.29.2만 있다. `docker compose`(공백)가 아니라
+> `docker-compose`(하이픈)로 실행할 것. docker 데몬 접근에 sudo가 필요하면 `sudo docker-compose ...`.
+> (sang을 docker 그룹에 넣어뒀으므로 재로그인 후에는 sudo 없이 가능.)
+
+> **x86_64/AMD 이미지**: 이미 `redroid/redroid:11.0.0_ndk_magisk`를 빌드해 두었다
+> (`redroid-script -a 11.0.0 -n -m`, AMD이므로 houdini 아닌 **libndk**). compose의 image가 이걸 가리킨다.
+> ABI 목록에 arm64-v8a가 잡히는 것으로 ARM 변환 동작을 확인함.
+
 카톡 로그인은 수동 (scrcpy로 화면 연결, **반드시 봇 전용 서브계정**):
 ```bash
 scrcpy --tcpip=127.0.0.1:5555
