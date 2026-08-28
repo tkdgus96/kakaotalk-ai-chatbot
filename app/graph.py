@@ -67,6 +67,7 @@ JSON으로만 답해. 다른 텍스트 금지.
 
 llm_with_tools = llm.bind_tools(tools)
 light_llm_with_tools = light_llm.bind_tools(tools)
+llm_with_tools_required = llm.bind_tools(tools, tool_choice="required")
 
 
 class ChatState(TypedDict):
@@ -78,6 +79,7 @@ class ChatState(TypedDict):
     buffer_context: str
     room_id: int
     sender: str
+    _forced_tool: bool
 
 
 def _resolve(config):
@@ -595,15 +597,53 @@ async def chat(state: ChatState) -> dict:
     else:
         response = await llm_with_tools.ainvoke(messages)
         used_model = "gpt-4o"
-    try:
-        from app.services.usage_service import record_message_usage
 
-        record_message_usage(response, "chat", used_model, room_id, sender)
-    except Exception:
-        pass
+    # Anti-hallucination: if the question needs fresh/computed facts but the
+    # model answered from memory (no tool call), force one tool-using retry.
+    if (
+        not getattr(response, "tool_calls", None)
+        and not _already_forced(state)
+        and _needs_fresh_tool(query)
+    ):
+        nudge = SystemMessage(
+            content="이 질문은 최신 정보나 정확한 계산이 필요해. 추측하지 말고 반드시 적절한 "
+            "도구(web_search/get_stock_quote/get_weather/calculate 등)를 호출해서 확인한 뒤 답해."
+        )
+        forced = await llm_with_tools_required.ainvoke(messages + [nudge])
+        record_message_usage_safe(forced, "chat", "gpt-4o", room_id, sender)
+        return {"messages": [forced], "_forced_tool": True}
+
+    record_message_usage_safe(response, "chat", used_model, room_id, sender)
     if not getattr(response, "tool_calls", None) and isinstance(response.content, str):
         response.content = _normalize_chat_output(response.content)
     return {"messages": [response]}
+
+
+def record_message_usage_safe(response, kind, model, room_id, sender):
+    try:
+        from app.services.usage_service import record_message_usage
+
+        record_message_usage(response, kind, model, room_id, sender)
+    except Exception:
+        pass
+
+
+def _already_forced(state) -> bool:
+    return bool(state.get("_forced_tool"))
+
+
+_FRESH_TOOL_MARKERS = (
+    "오늘", "지금", "현재", "최근", "요즘", "방금", "뉴스", "속보", "실적", "발표",
+    "주가", "시세", "환율", "날씨", "기온", "미세먼지", "순위", "얼마", "몇 시", "며칠",
+    "환전", "코인", "비트코인", "경기", "결과", "출시",
+)
+
+
+def _needs_fresh_tool(query: str) -> bool:
+    """Volatile/current/computational questions the model must not answer from
+    stale memory. Narrow on purpose (evergreen facts don't force a tool)."""
+    text = re.sub(r"^\[[^\]]+\]:\s*", "", query.strip())
+    return any(m in text for m in _FRESH_TOOL_MARKERS)
 
 
 _FULL_MODEL_HINTS = (
