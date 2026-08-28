@@ -9,7 +9,7 @@
 # 포트는 전부 127.0.0.1 바인딩 — Iris HTTP API는 무인증이므로 외부에 열지 말 것.
 services:
   redroid:
-    image: redroid/redroid:12.0.0-latest # x86_64 + ARM변환 커스텀 이미지면 교체
+    image: redroid/redroid:11.0.0_ndk_magisk # redroid-script -a 11.0.0 -n -m 로 빌드 (AMD=libndk)
     container_name: iris-redroid
     privileged: true
     restart: unless-stopped

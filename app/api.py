@@ -77,6 +77,12 @@ async def iris_room_map():
 
 @router.get("/bot/outbox")
 async def get_bot_outbox(bot_id: str = "main", limit: int = 10):
+    # When the Iris sender owns delivery, the legacy phone-bridge poller must
+    # not grab/ack items (it would race and, on failed delivery, drop them).
+    # The in-process Iris sender reads the repo directly, so gating the HTTP
+    # endpoint here retires the phone contract without affecting delivery.
+    if settings.enable_iris_sender:
+        return {"bot_id": bot_id, "items": []}
     rows = boss_service.get_pending_outbox(limit=limit)
     return {
         "bot_id": bot_id,
@@ -94,6 +100,8 @@ async def get_bot_outbox(bot_id: str = "main", limit: int = 10):
 
 @router.post("/bot/outbox/{outbox_id}/ack")
 async def ack_bot_outbox(outbox_id: int, body: OutboxAckRequest):
+    if settings.enable_iris_sender:
+        return {"ok": False, "message": "outbox delivery handled by iris sender"}
     ok = boss_service.ack_outbox(outbox_id, body.status)
     if not ok:
         return {"ok": False, "message": "outbox not found or already acked"}
