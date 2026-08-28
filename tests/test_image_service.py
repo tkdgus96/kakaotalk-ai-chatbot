@@ -63,6 +63,22 @@ class ImageRefAndCacheTests(unittest.TestCase):
         self.assertEqual(img._strip_command_prefix("！그림 설명"), "그림 설명")
 
 
+class DetectImageGenerationTests(unittest.TestCase):
+    def test_extracts_prompt(self):
+        self.assertEqual(
+            img.detect_image_generation("!한강에서 라면 먹는 고양이 그려줘"),
+            "한강에서 라면 먹는 고양이",
+        )
+        self.assertEqual(img.detect_image_generation("고양이 그림 그려줘"), "고양이")
+        self.assertEqual(img.detect_image_generation("!노을 사진 만들어줘"), "노을")
+        self.assertEqual(img.detect_image_generation("우주 고양이 생성해줘"), "우주 고양이")
+
+    def test_non_generation_returns_none(self):
+        self.assertIsNone(img.detect_image_generation("!이 사진 뭐야"))
+        self.assertIsNone(img.detect_image_generation("오늘 날씨 어때"))
+        self.assertIsNone(img.detect_image_generation("!그려줘"))  # no description
+
+
 class GeneratedImageCollectionTests(unittest.TestCase):
     def tearDown(self):
         img._generated_by_room.clear()

@@ -14,6 +14,8 @@ from app.models import KakaoMsg
 from app.prompts import FILTER_SYSTEM_PROMPT, SUMMARIZE_SYSTEM_PROMPT
 from app.services.reminder_service import handle_recurring_command
 from app.services.image_service import (
+    detect_image_generation,
+    generate_image_b64,
     handle_image_command,
     maybe_answer_with_image,
     start_image_collection,
@@ -84,6 +86,19 @@ async def handle_chat(data: KakaoMsg):
     if data.room_id not in settings.allowed_rooms:
         logger.info("New chatroom detected: '%s' (sender: %s)", data.room_id, data.sender)
         return {"answer": ""}
+
+    # Deterministic image generation for "<묘사> 그려줘" (before vision, since
+    # "그림 그려줘" would otherwise look like a reference to a recent photo).
+    if data.is_command:
+        gen_prompt = detect_image_generation(data.msg)
+        if gen_prompt:
+            await asyncio.to_thread(
+                add_chat_log, data.room_id, data.sender, data.msg, datetime.now().isoformat()
+            )
+            b64 = await generate_image_b64(gen_prompt)
+            if b64:
+                return {"answer": f"🎨 '{gen_prompt}' 그려봤어", "images": [b64]}
+            return {"answer": "이미지 생성에 실패했어. 잠시 후 다시 시도해줘."}
 
     # A command that refers to a recently posted photo -> answer via vision.
     if data.is_command:
