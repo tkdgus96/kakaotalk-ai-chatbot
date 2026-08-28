@@ -50,6 +50,7 @@ class Settings:
     default_prompt_variant: str
     enable_model_routing: bool
     light_model: str
+    image_gen_model: str
     iris_base_url: str
     iris_bot_triggers: list[str]
     iris_self_names: set[str]
@@ -92,6 +93,7 @@ settings = Settings(
     default_prompt_variant=os.getenv("DEFAULT_PROMPT_VARIANT", "default"),
     enable_model_routing=os.getenv("ENABLE_MODEL_ROUTING", "true").lower() in {"1", "true", "yes", "on"},
     light_model=os.getenv("LIGHT_MODEL", "gpt-4o-mini"),
+    image_gen_model=os.getenv("IMAGE_GEN_MODEL", "gpt-image-1"),
     iris_base_url=os.getenv("IRIS_BASE_URL", "http://127.0.0.1:3000"),
     iris_bot_triggers=[t.strip() for t in os.getenv("IRIS_BOT_TRIGGERS", "!,！").split(",") if t.strip()],
     iris_self_names={n.strip() for n in os.getenv("IRIS_SELF_NAMES", "온반봇").split(",") if n.strip()},
