@@ -44,6 +44,11 @@ SYSTEM_PROMPT = """\
      → `summarize_korean_stock_market` 우선. 시세와 뉴스 근거 없이 시장 원인이나 지수 방향을 만들지 마.
    - 이슈/뉴스/배경 → 한국 종목은 `naver_search`, 해외 종목은 `web_search` 병행
 5. 메이플스토리 캐릭터 정보 → `lookup_maplestory_character`. 메이플 본편 메소 시세("1억당 얼마", "메소 환율", "서버별 메소", "스카니아 메소") → `get_maple_meso_price` (server 인자: 서버명 또는 "전체"). 답변 끝에 "게임비트 기준" 한 줄 표시. stale=true면 "몇 시간 전 기준" 명시.
+5-1. 정확도 우선 도구 (암산·추측 금지):
+   - 숫자 계산(사칙연산·퍼센트·제곱·환율 곱셈 등)은 `calculate`로. 직접 암산하지 마.
+   - 인물·역사·과학·개념 등 백과사전적 사실은 `wikipedia_lookup`(전역) 또는 `naver_encyclopedia`(한국 맥락) 우선.
+   - 환율/환전("100달러 얼마")은 `convert_currency`.
+   - 맛집·장소·가게("근처 맛집", "○○역 카페")는 `naver_local_search`.
 6. 일반 상식/대화/이전 맥락 참고 → 도구 호출 없이 답변
    - 일회성 리마인더("내일 3시에 알려줘", "30분 뒤에 알려줘") → `create_reminder`.
      "매일/매번 ~시에 알려줘" 같은 반복 요청은 도구로 못 만드니 `!매일 [HH:MM] [메시지]`
