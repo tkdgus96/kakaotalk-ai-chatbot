@@ -32,6 +32,10 @@ class BossScheduler:
                 self.tick()
             except Exception as e:
                 logger.exception("scheduler tick failed: %s", e)
+            try:
+                await self._run_dynamic_reminders(now_kst())
+            except Exception as e:
+                logger.exception("dynamic reminders failed: %s", e)
             await asyncio.sleep(settings.scheduler_interval_seconds)
 
     def stop(self):
@@ -95,7 +99,9 @@ class BossScheduler:
 
     def _run_recurring_reminders(self, now: datetime):
         for r in self.repo.list_recurring_reminders_all():
-            if r["room_id"] not in settings.allowed_rooms:
+            if self._dynamic(r):
+                continue  # dynamic briefings handled async in _run_dynamic_reminders
+            if r["room_id"] not in settings.allowed_rooms or not self._fires_today(r, now):
                 continue
             fire_at = now.replace(
                 hour=int(r["fire_hour"]), minute=int(r["fire_minute"]), second=0, microsecond=0
@@ -110,6 +116,61 @@ class BossScheduler:
             dedup_key = f"recurring:{r['id']}:{now.date().isoformat()}"
             self.repo.enqueue_outbox(
                 r["room_id"], room["room_name"], msg, fire_at.isoformat(), now.isoformat(), dedup_key
+            )
+
+    @staticmethod
+    def _dynamic(row) -> bool:
+        try:
+            return bool(row["dynamic"])
+        except (KeyError, IndexError):
+            return False
+
+    @staticmethod
+    def _fires_today(row, now: datetime) -> bool:
+        """Empty days_of_week = every day; otherwise only on listed weekdays
+        (0=Mon..6=Sun, comma-separated)."""
+        try:
+            spec = (row["days_of_week"] or "").strip()
+        except (KeyError, IndexError):
+            spec = ""
+        if not spec:
+            return True
+        try:
+            allowed = {int(x) for x in spec.split(",") if x.strip() != ""}
+        except ValueError:
+            return True
+        return now.weekday() in allowed
+
+    async def _run_dynamic_reminders(self, now: datetime):
+        """Dynamic briefings: at fire time, generate a fresh answer (tools/LLM)
+        and enqueue the result. Generation is skipped once already enqueued today."""
+        from app.services.reminder_service import generate_briefing
+
+        for r in self.repo.list_recurring_reminders_all():
+            if not self._dynamic(r) or r["room_id"] not in settings.allowed_rooms:
+                continue
+            if not self._fires_today(r, now):
+                continue
+            fire_at = now.replace(
+                hour=int(r["fire_hour"]), minute=int(r["fire_minute"]), second=0, microsecond=0
+            )
+            if now < fire_at:
+                continue
+            dedup_key = f"recurring:{r['id']}:{now.date().isoformat()}"
+            if self.repo.outbox_dedup_exists(dedup_key):
+                continue  # already done today — don't regenerate (LLM cost)
+            room = self.repo.get_room(r["room_id"])
+            if not room:
+                continue
+            try:
+                text = await generate_briefing(r["room_id"], r["template"])
+            except Exception as e:
+                logger.warning("briefing generation failed id=%s: %s", r["id"], e)
+                continue
+            if not text:
+                continue
+            self.repo.enqueue_outbox(
+                r["room_id"], room["room_name"], text, fire_at.isoformat(), now.isoformat(), dedup_key
             )
 
     def _run_pre_reminders(self, now: datetime):

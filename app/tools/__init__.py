@@ -5,6 +5,11 @@ from app.tools.currency import convert_currency
 from app.tools.datetime_tool import date_calculate
 from app.tools.image_gen import generate_image
 from app.tools.naver_extra import naver_encyclopedia, naver_local_search
+from app.tools.schedule import (
+    cancel_recurring_reminder,
+    list_recurring_reminders,
+    schedule_recurring_reminder,
+)
 from app.tools.units import convert_unit
 from app.tools.wikipedia import wikipedia_lookup
 from app.tools.finance_research import compare_stocks, get_stock_news, get_stock_snapshot, summarize_korean_stock_market
@@ -49,6 +54,9 @@ tools = [
     naver_local_search,
     date_calculate,
     convert_unit,
+    schedule_recurring_reminder,
+    list_recurring_reminders,
+    cancel_recurring_reminder,
 ]
 llm_with_tools = llm.bind_tools(tools)
 
@@ -83,6 +91,9 @@ __all__ = [
     "naver_local_search",
     "date_calculate",
     "convert_unit",
+    "schedule_recurring_reminder",
+    "list_recurring_reminders",
+    "cancel_recurring_reminder",
     "tools",
     "llm_with_tools",
 ]

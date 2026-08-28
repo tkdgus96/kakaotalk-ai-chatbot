@@ -130,6 +130,8 @@ CREATE TABLE IF NOT EXISTS recurring_reminder (
   start_date TEXT NOT NULL,
   created_by TEXT NOT NULL,
   enabled INTEGER NOT NULL DEFAULT 1,
+  dynamic INTEGER NOT NULL DEFAULT 0,
+  days_of_week TEXT NOT NULL DEFAULT '',
   created_at TEXT NOT NULL,
   updated_at TEXT NOT NULL
 );
@@ -212,3 +214,12 @@ CREATE TABLE IF NOT EXISTS chat_summary_cache (
 );
 """
         )
+        # Migrations for pre-existing DBs (ADD COLUMN is a no-op error if present).
+        for stmt in (
+            "ALTER TABLE recurring_reminder ADD COLUMN dynamic INTEGER NOT NULL DEFAULT 0",
+            "ALTER TABLE recurring_reminder ADD COLUMN days_of_week TEXT NOT NULL DEFAULT ''",
+        ):
+            try:
+                conn.execute(stmt)
+            except Exception:
+                pass
