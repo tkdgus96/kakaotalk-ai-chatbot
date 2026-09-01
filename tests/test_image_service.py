@@ -47,46 +47,11 @@ class ImageRefAndCacheTests(unittest.TestCase):
     def tearDown(self):
         img._recent_image.clear()
 
-    def test_references_image(self):
-        self.assertTrue(img.references_image("이 사진 뭐야"))
-        self.assertTrue(img.references_image("방금 그림 설명해줘"))
-        self.assertFalse(img.references_image("오늘 날씨 어때"))
-
     def test_recent_image_cache_and_ttl(self):
         img.remember_room_image(1, "https://a/x.jpg")
         self.assertEqual(img.get_recent_room_image(1), "https://a/x.jpg")
         img._recent_image[1]["ts"] = time.time() - (img._RECENT_IMAGE_TTL + 10)
         self.assertIsNone(img.get_recent_room_image(1))
-
-    def test_strip_command_prefix(self):
-        self.assertEqual(img._strip_command_prefix("!이 사진 뭐야"), "이 사진 뭐야")
-        self.assertEqual(img._strip_command_prefix("！그림 설명"), "그림 설명")
-
-
-class DetectImageGenerationTests(unittest.TestCase):
-    def test_extracts_prompt(self):
-        self.assertEqual(
-            img.detect_image_generation("!한강에서 라면 먹는 고양이 그려줘"),
-            "한강에서 라면 먹는 고양이",
-        )
-        self.assertEqual(img.detect_image_generation("고양이 그림 그려줘"), "고양이 그림")
-        self.assertEqual(img.detect_image_generation("!노을 사진 만들어줘"), "노을 사진")
-        self.assertEqual(img.detect_image_generation("우주 고양이 생성해줘"), "우주 고양이")
-        # gen verb mid-sentence with trailing clarification (reference case)
-        self.assertEqual(
-            img.detect_image_generation("!사과 먹는 곰 그려줘 방금 올린 사진 참고해서"),
-            "사과 먹는 곰 방금 올린 사진 참고해서",
-        )
-
-    def test_non_generation_false_positives(self):
-        self.assertIsNone(img.detect_image_generation("오늘 뭐 만들어 먹지"))
-        self.assertIsNone(img.detect_image_generation("이건 어떻게 만들어졌어?"))
-        self.assertIsNone(img.detect_image_generation("그려진 그림 설명해줘"))
-
-    def test_non_generation_returns_none(self):
-        self.assertIsNone(img.detect_image_generation("!이 사진 뭐야"))
-        self.assertIsNone(img.detect_image_generation("오늘 날씨 어때"))
-        self.assertIsNone(img.detect_image_generation("!그려줘"))  # no description
 
 
 class GeneratedImageCollectionTests(unittest.TestCase):

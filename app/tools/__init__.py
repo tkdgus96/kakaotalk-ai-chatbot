@@ -4,6 +4,7 @@ from app.tools.chat_history import search_chat_history, summarize_chat_history
 from app.tools.currency import convert_currency
 from app.tools.datetime_tool import date_calculate
 from app.tools.image_gen import generate_image
+from app.tools.image_analyze import analyze_image
 from app.tools.naver_extra import naver_encyclopedia, naver_local_search
 from app.tools.schedule import (
     cancel_recurring_reminder,
@@ -47,6 +48,7 @@ tools = [
     compare_stocks,
     summarize_korean_stock_market,
     generate_image,
+    analyze_image,
     calculate,
     wikipedia_lookup,
     convert_currency,
@@ -84,6 +86,7 @@ __all__ = [
     "compare_stocks",
     "summarize_korean_stock_market",
     "generate_image",
+    "analyze_image",
     "calculate",
     "wikipedia_lookup",
     "convert_currency",

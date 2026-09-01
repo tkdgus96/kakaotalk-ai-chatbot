@@ -591,24 +591,34 @@ async def chat(state: ChatState) -> dict:
     if buffer_context:
         system_content += f"\n\n최근 채팅방 대화 (아직 저장 전):\n{buffer_context}"
 
+    # Let the LLM judge image intent (generate vs describe) and call the tool.
+    from app.services.image_service import get_recent_room_image
+
+    has_recent_image = bool(get_recent_room_image(room_id))
+    system_content += _image_capability_prompt(has_recent_image)
+
     messages = [SystemMessage(content=system_content)] + list(state["messages"])
     if _should_answer_from_retrieved_context(query, context):
         response = await llm.ainvoke(messages)
         used_model = "gpt-4o"
-    elif settings.enable_model_routing and not _needs_full_model(query):
+    elif settings.enable_model_routing and not _needs_full_model(query) and not has_recent_image:
         response = await light_llm_with_tools.ainvoke(messages)
         used_model = settings.light_model
     else:
+        # Image requests (and any message with a recent image to reason about)
+        # stay on the full model so tool-calling is reliable.
         response = await llm_with_tools.ainvoke(messages)
         used_model = "gpt-4o"
 
-    # Image generation: if the user clearly asked to draw/create a picture but
-    # the model answered in text (a common refusal / "I can't draw" failure),
-    # force the generate_image tool instead of letting the refusal stand.
+    # Reliability backstop for the LLM's own capability-refusal: if it answered
+    # in text with "I can't generate images" instead of calling the tool, force
+    # generate_image once. This does NOT pattern-match the user's request (that's
+    # the LLM's job) — it only catches the model wrongly denying a capability it
+    # has. Such a refusal only occurs when the user did ask for an image.
     if (
         not getattr(response, "tool_calls", None)
         and not _already_forced(state)
-        and _wants_image_gen(query)
+        and _is_image_capability_refusal(response.content)
     ):
         forced = await llm_force_image.ainvoke(messages)
         record_message_usage_safe(forced, "chat", "gpt-4o", room_id, sender)
@@ -662,26 +672,41 @@ def _needs_fresh_tool(query: str) -> bool:
     return any(m in text for m in _FRESH_TOOL_MARKERS)
 
 
-# Explicit "make me a picture" intent. Kept conservative on purpose: falsely
-# forcing image gen wastes money and posts an unwanted image, so we require a
-# real draw/create verb, not just the noun 그림/사진 (which appears in "이 사진 뭐야").
-# The deterministic short-circuit (image_service.detect_image_generation) already
-# catches clean imperatives before the graph; this is the net for the phrasings
-# it misses ("…짤 하나 뽑아줘", "…느낌으로 만들어줄래?") so the LLM can't refuse in text.
-_IMAGE_GEN_RE = re.compile(
-    r"그려\s*(줘|봐|줄래|주라|라|주세요)|그려\s*줬|"
-    r"(그림|이미지|일러스트|짤|포스터|캐릭터|아이콘|로고)\s*(을|를|로|으로|하나|좀)?\s*"
-    r"(그려|만들|생성|뽑아|제작)"
+def _image_capability_prompt(has_recent_image: bool) -> str:
+    """Tell the model it CAN produce/read images via tools, so it judges intent
+    and calls the tool instead of refusing in text. Intent detection is fully the
+    model's job here — no keyword matching on the user's phrasing."""
+    base = (
+        "\n\n[이미지 기능]\n"
+        "- 너는 `generate_image` 도구로 그림을 직접 생성할 수 있다. 사용자가 무언가를 "
+        "그려/만들어/생성해 달라거나 짤·일러스트·포스터 등을 요청하면 반드시 이 도구를 호출해라. "
+        "절대 '나는 그림을 못 그린다'거나 '직접 그려줄 수는 없다'고 텍스트로 거절하지 마라.\n"
+        "- 이미 이 방에 올라온 이미지를 참고해서 그려달라는 뉘앙스(이 아이템/이거/방금 사진 보고 등)면 "
+        "`generate_image`의 `use_reference=true`로 그 이미지를 시각적 레퍼런스로 반영해라.\n"
+        "- 방금 올라온 사진의 '내용'을 물으면(이 사진 뭐야, 무슨 아이템이야 등) `analyze_image` 도구로 확인해 답해라."
+    )
+    if has_recent_image:
+        base += (
+            "\n- 참고: 지금 이 방에는 최근 사용자가 올린 이미지가 있다. "
+            "설명 요청이면 `analyze_image`, 그걸 참고해 그려달라는 요청이면 `generate_image(use_reference=true)`를 써라."
+        )
+    return base
+
+
+# Non-intent backstop: matches the MODEL's own capability-refusal in its output,
+# not the user's request. Used only to force generate_image when the LLM wrongly
+# says it can't make an image.
+_IMG_REFUSAL_RE = re.compile(
+    r"(그림|이미지|그려|생성)[^.\n]{0,20}?"
+    r"(못\s*(그려|만들|생성)|그려\s*줄\s*수\s*없|그릴\s*수\s*없|"
+    r"생성할\s*수\s*없|만들\s*수\s*없|만들어\s*드릴\s*수\s*없|직접\s*그려)"
 )
-# describe/vision intent — never treat as generation
-_IMAGE_DESC_RE = re.compile(r"(사진|이미지|그림|짤)\s*(뭐|무엇|어디|누구|설명|분석|봐줘|읽어)")
 
 
-def _wants_image_gen(query: str) -> bool:
-    text = re.sub(r"^\[[^\]]+\]:\s*", "", query.strip())
-    if _IMAGE_DESC_RE.search(text):
+def _is_image_capability_refusal(content) -> bool:
+    if not isinstance(content, str) or not content:
         return False
-    return bool(_IMAGE_GEN_RE.search(text))
+    return bool(_IMG_REFUSAL_RE.search(content))
 
 
 _FULL_MODEL_HINTS = (
