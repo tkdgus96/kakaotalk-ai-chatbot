@@ -90,7 +90,7 @@ async def _download_bytes(url: str, timeout: float = 20.0) -> tuple[bytes, str] 
     """Download a URL and return (bytes, mime). None on failure."""
     try:
         async with httpx.AsyncClient(timeout=timeout, follow_redirects=True) as client:
-            res = await client.get(url)
+            res = await client.get(url, headers={"User-Agent": "Mozilla/5.0 (onban-bot)"})
         if res.status_code != 200 or not res.content:
             logger.warning("image download failed status=%s url=%.80s", res.status_code, url)
             return None
