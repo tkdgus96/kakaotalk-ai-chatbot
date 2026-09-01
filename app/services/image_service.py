@@ -1,19 +1,19 @@
 """Image send/receive for the Iris bridge.
 
 Receive: KakaoTalk photo messages arrive via Iris with a signed CDN `url`
-(no decryption needed). We cache the most recent photo per room; a following
-`!` command that refers to it ("이 사진/이미지/그림 …") is answered by gpt-4o
-vision.
+(no decryption needed). We cache the most recent photo per room. Whether a
+following message wants that image described or used as a drawing reference is
+judged by the LLM, which calls the `analyze_image` / `generate_image` tools —
+this module just provides the primitives (describe/generate/cache).
 
-Send: `!그림 <프롬프트>` generates an image (DALL·E 3); `!이미지/!짤 <검색어>`
-fetches a web image (Naver image search). Both return base64 for Iris /reply.
+Send: `!그림 <프롬프트>` generates an image; `!이미지/!짤 <검색어>` fetches a web
+image (Naver image search). Both return base64 for Iris /reply.
 """
 
 from __future__ import annotations
 
 import base64
 import io
-import re
 import time
 
 import httpx
@@ -25,7 +25,6 @@ from app.dependencies import llm, logger
 
 IMAGE_COMMANDS = {"!그림", "!이미지", "!짤"}
 _RECENT_IMAGE_TTL = 30 * 60  # 30 min
-_IMAGE_REF_WORDS = ("사진", "이미지", "그림", "짤", "방금거", "이거", "위에", "아이템", "참고", "참조", "이걸", "저거")
 
 # room_id -> {"url": str, "ts": float}
 _recent_image: dict[int, dict] = {}
@@ -61,33 +60,6 @@ def get_recent_room_image(room_id: int) -> str | None:
     if time.time() - rec["ts"] > _RECENT_IMAGE_TTL:
         return None
     return rec["url"]
-
-
-def references_image(text: str) -> bool:
-    return any(w in text for w in _IMAGE_REF_WORDS)
-
-
-# "<묘사> 그려줘/생성해줘/만들어줘 [부연설명]" 형태를 결정론적으로 잡아 프롬프트를 뽑는다.
-# 동사가 문장 끝이 아니어도(뒤에 "이 사진이 ~야" 같은 설명이 붙어도) 감지한다.
-# LLM 도구 선택은 히스토리에 휩쓸려 누락되기도 해서, 이 경로로 확실히 생성한다.
-_GEN_VERB_RE = re.compile(
-    r"(그려\s*줘|그려\s*봐|그려\s*줄래|그려\s*라|그려\s*주라|"
-    r"생성\s*해\s*줘|만들어\s*줘|그려\s*주세요|그려(?=\s*[.!~?ㅋㅎ]*$))"
-)
-# 비명령형 오탐 방지: "그려진/그려졌", "만들어졌/먹지", "생성된" 등
-_GEN_FALSE = re.compile(r"그려(졌|진|지)|만들어(졌|진|먹|둔|낸)|생성(된|되|물)")
-
-
-def detect_image_generation(msg: str) -> str | None:
-    """Return the image prompt if `msg` is a '<desc> 그려줘 …' style request."""
-    text = msg.strip()
-    if text and text[0] in "!！":
-        text = text[1:].strip()
-    if not _GEN_VERB_RE.search(text) or _GEN_FALSE.search(text):
-        return None
-    prompt = _GEN_VERB_RE.sub(" ", text)
-    prompt = re.sub(r"\s+", " ", prompt).strip(" .!~?ㅋㅎ")
-    return prompt or None
 
 
 async def _download_bytes(url: str, timeout: float = 20.0) -> tuple[bytes, str] | None:
@@ -155,39 +127,6 @@ async def describe_image(url: str, question: str) -> str | None:
     except Exception as e:
         logger.warning("vision describe failed: %s", e)
         return None
-
-
-async def maybe_answer_with_image(room_id: int, msg: str) -> str | None:
-    """If `msg` refers to a recent photo in the room, answer via vision."""
-    if not references_image(msg):
-        return None
-    url = get_recent_room_image(room_id)
-    if not url:
-        return None
-    question = _strip_command_prefix(msg)
-    answer = await describe_image(url, question)
-    if answer:
-        # Remember what the photo showed so it's searchable later ("저번 그 사진").
-        try:
-            import asyncio
-
-            from app.boss.utils.week import now_kst
-            from app.chat_log import add_chat_log
-
-            summary = answer[:300].replace("\n", " ")
-            await asyncio.to_thread(
-                add_chat_log, room_id, "온반봇", f"[사진 설명] {summary}", now_kst().isoformat()
-            )
-        except Exception:
-            pass
-    return answer
-
-
-def _strip_command_prefix(msg: str) -> str:
-    text = msg.strip()
-    if text and text[0] in "!！":
-        text = text[1:]
-    return text.strip()
 
 
 async def is_prompt_flagged(prompt: str) -> bool:

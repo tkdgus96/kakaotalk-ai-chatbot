@@ -14,13 +14,7 @@ from app.models import KakaoMsg
 from app.prompts import FILTER_SYSTEM_PROMPT, SUMMARIZE_SYSTEM_PROMPT
 from app.services.image_service import (
     IMAGE_COMMANDS,
-    detect_image_generation,
-    generate_image_b64,
-    generate_image_ref_b64,
-    get_recent_room_image,
     handle_image_command,
-    maybe_answer_with_image,
-    references_image,
     start_image_collection,
     take_generated_images,
 )
@@ -119,36 +113,10 @@ async def handle_chat(data: KakaoMsg):
         logger.info("New chatroom detected: '%s' (sender: %s)", data.room_id, data.sender)
         return {"answer": ""}
 
-    # Deterministic image generation for "<묘사> 그려줘" (before vision, since
-    # "그림 그려줘" would otherwise look like a reference to a recent photo).
-    if data.is_command:
-        gen_prompt = detect_image_generation(data.msg)
-        if gen_prompt:
-            await asyncio.to_thread(
-                add_chat_log, data.room_id, data.sender, data.msg, datetime.now().isoformat()
-            )
-            if not allow_image_gen(data.sender, settings.image_gen_daily_limit):
-                return {"answer": f"오늘 이미지는 여기까지야 (하루 {settings.image_gen_daily_limit}장). 내일 다시 해줘!"}
-            # If the request refers to a recently posted image, generate with it
-            # as a visual reference (gpt-image-1); else plain text-to-image.
-            ref_url = get_recent_room_image(data.room_id) if references_image(data.msg) else None
-            if ref_url:
-                b64 = await generate_image_ref_b64(gen_prompt, ref_url)
-            else:
-                b64 = await generate_image_b64(gen_prompt)
-            if b64:
-                note = " (첨부 이미지 참고)" if ref_url else ""
-                return {"answer": f"🎨 '{gen_prompt}' 그려봤어{note}", "images": [b64]}
-            return {"answer": "이미지 생성에 실패했어. 잠시 후 다시 시도해줘."}
-
-    # A command that refers to a recently posted photo -> answer via vision.
-    if data.is_command:
-        vision_answer = await maybe_answer_with_image(data.room_id, data.msg)
-        if vision_answer:
-            await asyncio.to_thread(
-                add_chat_log, data.room_id, data.sender, data.msg, datetime.now().isoformat()
-            )
-            return {"answer": vision_answer}
+    # Image generation ("그려줘") and image description ("이 사진 뭐야") intent is no
+    # longer pattern-matched here — the LLM judges it in the graph and calls the
+    # generate_image / analyze_image tools. Explicit !그림/!이미지/!짤 commands above
+    # stay deterministic; natural-language requests flow through to the graph.
 
     await asyncio.to_thread(
         add_chat_log, data.room_id, data.sender, data.msg, datetime.now().isoformat()
