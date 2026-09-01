@@ -68,6 +68,10 @@ JSON으로만 답해. 다른 텍스트 금지.
 llm_with_tools = llm.bind_tools(tools)
 light_llm_with_tools = light_llm.bind_tools(tools)
 llm_with_tools_required = llm.bind_tools(tools, tool_choice="required")
+# Force the image tool specifically: gpt-4o sometimes refuses in text ("직접
+# 그려줄 순 없지만…") instead of calling generate_image. When the message clearly
+# asks to draw/create a picture but no tool was called, we retry forcing this one.
+llm_force_image = llm.bind_tools(tools, tool_choice="generate_image")
 
 
 class ChatState(TypedDict):
@@ -598,6 +602,18 @@ async def chat(state: ChatState) -> dict:
         response = await llm_with_tools.ainvoke(messages)
         used_model = "gpt-4o"
 
+    # Image generation: if the user clearly asked to draw/create a picture but
+    # the model answered in text (a common refusal / "I can't draw" failure),
+    # force the generate_image tool instead of letting the refusal stand.
+    if (
+        not getattr(response, "tool_calls", None)
+        and not _already_forced(state)
+        and _wants_image_gen(query)
+    ):
+        forced = await llm_force_image.ainvoke(messages)
+        record_message_usage_safe(forced, "chat", "gpt-4o", room_id, sender)
+        return {"messages": [forced], "_forced_tool": True}
+
     # Anti-hallucination: if the question needs fresh/computed facts but the
     # model answered from memory (no tool call), force one tool-using retry.
     if (
@@ -644,6 +660,28 @@ def _needs_fresh_tool(query: str) -> bool:
     stale memory. Narrow on purpose (evergreen facts don't force a tool)."""
     text = re.sub(r"^\[[^\]]+\]:\s*", "", query.strip())
     return any(m in text for m in _FRESH_TOOL_MARKERS)
+
+
+# Explicit "make me a picture" intent. Kept conservative on purpose: falsely
+# forcing image gen wastes money and posts an unwanted image, so we require a
+# real draw/create verb, not just the noun 그림/사진 (which appears in "이 사진 뭐야").
+# The deterministic short-circuit (image_service.detect_image_generation) already
+# catches clean imperatives before the graph; this is the net for the phrasings
+# it misses ("…짤 하나 뽑아줘", "…느낌으로 만들어줄래?") so the LLM can't refuse in text.
+_IMAGE_GEN_RE = re.compile(
+    r"그려\s*(줘|봐|줄래|주라|라|주세요)|그려\s*줬|"
+    r"(그림|이미지|일러스트|짤|포스터|캐릭터|아이콘|로고)\s*(을|를|로|으로|하나|좀)?\s*"
+    r"(그려|만들|생성|뽑아|제작)"
+)
+# describe/vision intent — never treat as generation
+_IMAGE_DESC_RE = re.compile(r"(사진|이미지|그림|짤)\s*(뭐|무엇|어디|누구|설명|분석|봐줘|읽어)")
+
+
+def _wants_image_gen(query: str) -> bool:
+    text = re.sub(r"^\[[^\]]+\]:\s*", "", query.strip())
+    if _IMAGE_DESC_RE.search(text):
+        return False
+    return bool(_IMAGE_GEN_RE.search(text))
 
 
 _FULL_MODEL_HINTS = (
