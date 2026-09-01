@@ -67,22 +67,26 @@ def references_image(text: str) -> bool:
     return any(w in text for w in _IMAGE_REF_WORDS)
 
 
-# "<묘사> 그려줘/생성해줘/만들어줘" 형태를 결정론적으로 잡아 프롬프트만 추출.
+# "<묘사> 그려줘/생성해줘/만들어줘 [부연설명]" 형태를 결정론적으로 잡아 프롬프트를 뽑는다.
+# 동사가 문장 끝이 아니어도(뒤에 "이 사진이 ~야" 같은 설명이 붙어도) 감지한다.
 # LLM 도구 선택은 히스토리에 휩쓸려 누락되기도 해서, 이 경로로 확실히 생성한다.
-_GEN_TAIL_RE = re.compile(
-    r"\s*(사진|그림|이미지|짤)?\s*(좀|하나|한\s*장)?\s*"
-    r"(그려\s*줘|그려\s*봐|그려\s*줄래|그려|생성\s*해\s*줘|생성\s*해|만들어\s*줘|만들어)\s*[.!~ㅋ？?]*$"
+_GEN_VERB_RE = re.compile(
+    r"(그려\s*줘|그려\s*봐|그려\s*줄래|그려\s*라|그려\s*주라|"
+    r"생성\s*해\s*줘|만들어\s*줘|그려\s*주세요|그려(?=\s*[.!~?ㅋㅎ]*$))"
 )
+# 비명령형 오탐 방지: "그려진/그려졌", "만들어졌/먹지", "생성된" 등
+_GEN_FALSE = re.compile(r"그려(졌|진|지)|만들어(졌|진|먹|둔|낸)|생성(된|되|물)")
 
 
 def detect_image_generation(msg: str) -> str | None:
-    """Return the image prompt if `msg` is a '<desc> 그려줘' style request, else None."""
+    """Return the image prompt if `msg` is a '<desc> 그려줘 …' style request."""
     text = msg.strip()
     if text and text[0] in "!！":
         text = text[1:].strip()
-    if not _GEN_TAIL_RE.search(text):
+    if not _GEN_VERB_RE.search(text) or _GEN_FALSE.search(text):
         return None
-    prompt = _GEN_TAIL_RE.sub("", text).strip()
+    prompt = _GEN_VERB_RE.sub(" ", text)
+    prompt = re.sub(r"\s+", " ", prompt).strip(" .!~?ㅋㅎ")
     return prompt or None
 
 

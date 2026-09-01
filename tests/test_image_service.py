@@ -69,9 +69,19 @@ class DetectImageGenerationTests(unittest.TestCase):
             img.detect_image_generation("!한강에서 라면 먹는 고양이 그려줘"),
             "한강에서 라면 먹는 고양이",
         )
-        self.assertEqual(img.detect_image_generation("고양이 그림 그려줘"), "고양이")
-        self.assertEqual(img.detect_image_generation("!노을 사진 만들어줘"), "노을")
+        self.assertEqual(img.detect_image_generation("고양이 그림 그려줘"), "고양이 그림")
+        self.assertEqual(img.detect_image_generation("!노을 사진 만들어줘"), "노을 사진")
         self.assertEqual(img.detect_image_generation("우주 고양이 생성해줘"), "우주 고양이")
+        # gen verb mid-sentence with trailing clarification (reference case)
+        self.assertEqual(
+            img.detect_image_generation("!사과 먹는 곰 그려줘 방금 올린 사진 참고해서"),
+            "사과 먹는 곰 방금 올린 사진 참고해서",
+        )
+
+    def test_non_generation_false_positives(self):
+        self.assertIsNone(img.detect_image_generation("오늘 뭐 만들어 먹지"))
+        self.assertIsNone(img.detect_image_generation("이건 어떻게 만들어졌어?"))
+        self.assertIsNone(img.detect_image_generation("그려진 그림 설명해줘"))
 
     def test_non_generation_returns_none(self):
         self.assertIsNone(img.detect_image_generation("!이 사진 뭐야"))
