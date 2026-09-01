@@ -16,8 +16,11 @@ from app.services.image_service import (
     IMAGE_COMMANDS,
     detect_image_generation,
     generate_image_b64,
+    generate_image_ref_b64,
+    get_recent_room_image,
     handle_image_command,
     maybe_answer_with_image,
+    references_image,
     start_image_collection,
     take_generated_images,
 )
@@ -126,9 +129,16 @@ async def handle_chat(data: KakaoMsg):
             )
             if not allow_image_gen(data.sender, settings.image_gen_daily_limit):
                 return {"answer": f"오늘 이미지는 여기까지야 (하루 {settings.image_gen_daily_limit}장). 내일 다시 해줘!"}
-            b64 = await generate_image_b64(gen_prompt)
+            # If the request refers to a recently posted image, generate with it
+            # as a visual reference (gpt-image-1); else plain text-to-image.
+            ref_url = get_recent_room_image(data.room_id) if references_image(data.msg) else None
+            if ref_url:
+                b64 = await generate_image_ref_b64(gen_prompt, ref_url)
+            else:
+                b64 = await generate_image_b64(gen_prompt)
             if b64:
-                return {"answer": f"🎨 '{gen_prompt}' 그려봤어", "images": [b64]}
+                note = " (첨부 이미지 참고)" if ref_url else ""
+                return {"answer": f"🎨 '{gen_prompt}' 그려봤어{note}", "images": [b64]}
             return {"answer": "이미지 생성에 실패했어. 잠시 후 다시 시도해줘."}
 
     # A command that refers to a recently posted photo -> answer via vision.
