@@ -20,6 +20,8 @@ PRICING = {
 IMAGE_PRICING = {
     "gpt-image-1": 0.04,
     "gpt-image-1-mini": 0.005,
+    "pollinations": 0.0,  # free provider
+    "gemini-2.5-flash-image": 0.039,  # ~0.039/image; free tier available
 }
 _DEFAULT_TOKEN_RATE = (2.50, 10.00)
 _DEFAULT_IMAGE_COST = 0.01

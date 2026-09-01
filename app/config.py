@@ -52,6 +52,10 @@ class Settings:
     light_model: str
     image_gen_model: str
     image_gen_ref_model: str
+    image_gen_provider: str
+    image_ref_provider: str
+    gemini_api_key: str | None
+    gemini_image_model: str
     iris_base_url: str
     iris_bot_triggers: list[str]
     iris_self_names: set[str]
@@ -117,6 +121,16 @@ settings = Settings(
     light_model=os.getenv("LIGHT_MODEL", "gpt-4o-mini"),
     image_gen_model=os.getenv("IMAGE_GEN_MODEL", "gpt-image-1"),
     image_gen_ref_model=os.getenv("IMAGE_GEN_REF_MODEL", "gpt-image-1"),
+    # Plain text→image default = free Pollinations (real saving; plain gen is the
+    # common case). Reference/edit default = openai: Gemini 2.5 Flash Image works
+    # but its free tier is limit=0 (needs billing, ~$0.039 ≈ gpt-image-1), and
+    # every other image-conditioned provider is similarly paid — so defaulting to
+    # gemini would just 429→fall back to openai each call. Flip IMAGE_REF_PROVIDER
+    # to gemini once billing is enabled. Both fall back to the OpenAI models above.
+    image_gen_provider=os.getenv("IMAGE_GEN_PROVIDER", "pollinations"),
+    image_ref_provider=os.getenv("IMAGE_REF_PROVIDER", "openai"),
+    gemini_api_key=os.getenv("GEMINI_API_KEY") or None,
+    gemini_image_model=os.getenv("GEMINI_IMAGE_MODEL", "gemini-2.5-flash-image"),
     iris_base_url=os.getenv("IRIS_BASE_URL", "http://127.0.0.1:3000"),
     iris_bot_triggers=[t.strip() for t in os.getenv("IRIS_BOT_TRIGGERS", "!,！").split(",") if t.strip()],
     iris_self_names={n.strip() for n in os.getenv("IRIS_SELF_NAMES", "온반봇").split(",") if n.strip()},
