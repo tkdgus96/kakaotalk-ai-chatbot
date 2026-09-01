@@ -25,7 +25,7 @@ from app.dependencies import llm, logger
 
 IMAGE_COMMANDS = {"!그림", "!이미지", "!짤"}
 _RECENT_IMAGE_TTL = 30 * 60  # 30 min
-_IMAGE_REF_WORDS = ("사진", "이미지", "그림", "짤", "방금거", "이거", "위에")
+_IMAGE_REF_WORDS = ("사진", "이미지", "그림", "짤", "방금거", "이거", "위에", "아이템", "참고", "참조", "이걸", "저거")
 
 # room_id -> {"url": str, "ts": float}
 _recent_image: dict[int, dict] = {}
@@ -197,6 +197,53 @@ async def is_prompt_flagged(prompt: str) -> bool:
     except Exception as e:
         logger.warning("moderation check failed (allowing): %s", e)
         return False
+
+
+async def generate_image_ref_b64(prompt: str, ref_url: str) -> str | None:
+    """Generate an image that references an attached image (e.g. 'draw party
+    members eating THIS item'). Uses gpt-image-1's image-input edit endpoint so
+    the model actually sees the reference — pricier than plain gen, used only
+    when the request refers to an image."""
+    if not settings.openai_api_key:
+        return None
+    if await is_prompt_flagged(prompt):
+        logger.info("ref image prompt blocked by moderation")
+        return None
+    got = await _download_bytes(ref_url)
+    if not got:
+        return None
+    raw, _ = got
+    try:
+        import io
+
+        from PIL import Image
+
+        # gpt-image-1 edit wants a real image file; normalize to PNG.
+        buf = io.BytesIO()
+        Image.open(io.BytesIO(raw)).convert("RGB").save(buf, format="PNG")
+        buf.seek(0)
+        buf.name = "reference.png"
+
+        client = AsyncOpenAI(api_key=settings.openai_api_key)
+        res = await client.images.edit(
+            model=settings.image_gen_ref_model, image=buf, prompt=prompt, size="1024x1024", n=1
+        )
+        from app.services.usage_service import record_image_usage
+
+        record_image_usage(settings.image_gen_ref_model)
+        item = res.data[0]
+        b64 = getattr(item, "b64_json", None)
+        if b64:
+            return _to_send_jpeg_b64(base64.b64decode(b64))
+        url = getattr(item, "url", None)
+        if url:
+            g = await _download_bytes(url)
+            if g:
+                return _to_send_jpeg_b64(g[0])
+        return None
+    except Exception as e:
+        logger.warning("ref image generate failed: %s", e)
+        return None
 
 
 async def generate_image_b64(prompt: str) -> str | None:
