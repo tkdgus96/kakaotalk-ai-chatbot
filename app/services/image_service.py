@@ -144,21 +144,30 @@ async def is_prompt_flagged(prompt: str) -> bool:
 
 async def generate_image_ref_b64(prompt: str, ref_url: str) -> str | None:
     """Generate an image that references an attached image (e.g. 'draw party
-    members eating THIS item'). Uses gpt-image-1's image-input edit endpoint so
-    the model actually sees the reference — pricier than plain gen, used only
-    when the request refers to an image."""
-    if not settings.openai_api_key:
-        return None
+    members eating THIS item'), so the model actually sees the reference.
+    Provider = settings.image_ref_provider (gemini | openai); Gemini 2.5 Flash
+    Image is cheap/free, OpenAI gpt-image-1 is the paid fallback."""
     if await is_prompt_flagged(prompt):
         logger.info("ref image prompt blocked by moderation")
         return None
     got = await _download_bytes(ref_url)
     if not got:
         return None
-    raw, _ = got
-    try:
-        import io
+    raw, mime = got
 
+    provider = settings.image_ref_provider
+    if provider == "gemini" and settings.gemini_api_key:
+        b64 = await _gen_gemini_ref_b64(prompt, raw, mime)
+        if b64:
+            return b64
+        logger.info("gemini ref gen failed; falling back to openai")
+    return await _gen_openai_ref_b64(prompt, raw)
+
+
+async def _gen_openai_ref_b64(prompt: str, raw: bytes) -> str | None:
+    if not settings.openai_api_key:
+        return None
+    try:
         from PIL import Image
 
         # gpt-image-1 edit wants a real image file; normalize to PNG.
@@ -185,15 +194,109 @@ async def generate_image_ref_b64(prompt: str, ref_url: str) -> str | None:
                 return _to_send_jpeg_b64(g[0])
         return None
     except Exception as e:
-        logger.warning("ref image generate failed: %s", e)
+        logger.warning("openai ref image generate failed: %s", e)
+        return None
+
+
+async def _gen_gemini_ref_b64(prompt: str, raw: bytes, mime: str) -> str | None:
+    """Gemini 2.5 Flash Image (image-input edit) via the Generative Language
+    REST API. Returns the first inline image part as a compressed JPEG b64."""
+    if not settings.gemini_api_key:
+        return None
+    try:
+        from PIL import Image
+
+        # Normalize to a mime Gemini reliably accepts.
+        buf = io.BytesIO()
+        Image.open(io.BytesIO(raw)).convert("RGB").save(buf, format="PNG")
+        ref_b64 = base64.b64encode(buf.getvalue()).decode()
+
+        url = (
+            f"https://generativelanguage.googleapis.com/v1beta/models/"
+            f"{settings.gemini_image_model}:generateContent"
+        )
+        payload = {
+            "contents": [
+                {
+                    "parts": [
+                        {"text": prompt},
+                        {"inlineData": {"mimeType": "image/png", "data": ref_b64}},
+                    ]
+                }
+            ],
+            "generationConfig": {"responseModalities": ["IMAGE"]},
+        }
+        async with httpx.AsyncClient(timeout=90.0) as client:
+            res = await client.post(
+                url,
+                params={"key": settings.gemini_api_key},
+                json=payload,
+                headers={"Content-Type": "application/json"},
+            )
+        if res.status_code != 200:
+            logger.warning("gemini ref gen status=%s body=%.200s", res.status_code, res.text)
+            return None
+        data = res.json()
+        from app.services.usage_service import record_image_usage
+
+        record_image_usage(settings.gemini_image_model)
+        for cand in data.get("candidates", []):
+            for part in cand.get("content", {}).get("parts", []):
+                inline = part.get("inlineData") or part.get("inline_data")
+                if inline and inline.get("data"):
+                    return _to_send_jpeg_b64(base64.b64decode(inline["data"]))
+        logger.warning("gemini ref gen: no image part in response")
+        return None
+    except Exception as e:
+        logger.warning("gemini ref image generate failed: %s", e)
         return None
 
 
 async def generate_image_b64(prompt: str) -> str | None:
-    if not settings.openai_api_key:
-        return None
+    """Plain text→image. Provider = settings.image_gen_provider
+    (pollinations | openai). Pollinations is free (no key); OpenAI
+    gpt-image-1-mini is the paid fallback."""
     if await is_prompt_flagged(prompt):
         logger.info("image prompt blocked by moderation")
+        return None
+
+    if settings.image_gen_provider == "pollinations":
+        b64 = await _gen_pollinations_b64(prompt)
+        if b64:
+            return b64
+        logger.info("pollinations gen failed; falling back to openai")
+    return await _gen_openai_b64(prompt)
+
+
+async def _gen_pollinations_b64(prompt: str) -> str | None:
+    """Free image generation via Pollinations.ai (FLUX-based, no API key)."""
+    try:
+        from urllib.parse import quote
+
+        url = f"https://image.pollinations.ai/prompt/{quote(prompt)}"
+        async with httpx.AsyncClient(timeout=90.0, follow_redirects=True) as client:
+            res = await client.get(
+                url,
+                params={"width": 1024, "height": 1024, "nologo": "true", "model": "flux"},
+                headers={"User-Agent": "Mozilla/5.0 (onban-bot)"},
+            )
+        if res.status_code != 200 or not res.content:
+            logger.warning("pollinations status=%s len=%s", res.status_code, len(res.content or b""))
+            return None
+        if not res.headers.get("content-type", "").startswith("image"):
+            logger.warning("pollinations non-image response: %.120s", res.text)
+            return None
+        from app.services.usage_service import record_image_usage
+
+        record_image_usage("pollinations")
+        return _to_send_jpeg_b64(res.content)
+    except Exception as e:
+        logger.warning("pollinations generate failed: %s", e)
+        return None
+
+
+async def _gen_openai_b64(prompt: str) -> str | None:
+    if not settings.openai_api_key:
         return None
     # NOTE: `response_format` is omitted (this account's images API rejects it).
     # gpt-image-1 returns b64_json; other models may return a url (downloaded).
