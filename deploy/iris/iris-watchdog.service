@@ -1,0 +1,9 @@
+[Unit]
+Description=Iris bridge watchdog (restarts Iris if the API is down)
+After=docker.service
+Requires=docker.service
+
+[Service]
+Type=oneshot
+ExecStart=/home/sang/workspace/kakao-talk-ai-bot/deploy/iris/iris-watchdog.sh
+User=root

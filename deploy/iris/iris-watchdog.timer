@@ -1,0 +1,12 @@
+[Unit]
+Description=Run the Iris bridge watchdog periodically
+
+[Timer]
+# Covers the boot path too, so recovery does not depend on iris-bridge alone.
+OnBootSec=90s
+OnUnitActiveSec=2min
+AccuracySec=15s
+Unit=iris-watchdog.service
+
+[Install]
+WantedBy=timers.target
