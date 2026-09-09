@@ -98,18 +98,21 @@ def is_symbol_like(token: str) -> bool:
 def _extract_first_ticker(text: str | None):
     if not text:
         return None
-    krx_match = re.search(r"\b\d{6}\.(?:KS|KQ)\b", text)
+    krx_match = re.search(r"\b\d{6}\.(?:KS|KQ)\b", text, re.IGNORECASE)
     if krx_match:
-        return krx_match.group(0)
+        return krx_match.group(0).upper()
+    code_match = re.search(r"\b\d{6}\b", text)
+    if code_match:
+        return code_match.group(0)
     us_class_match = re.search(r"\b[A-Z]{1,5}[-.][A-Z]\b", text)
     if us_class_match:
-        return us_class_match.group(0).replace(".", "-")
-    match = re.search(r"\b[A-Z]{1,6}(?:\.(?:KS|KQ))?\b", text)
-    if match:
-        return match.group(0)
+        return us_class_match.group(0).upper().replace(".", "-")
     idx_match = re.search(r"\^[A-Z0-9]{2,8}", text)
     if idx_match:
-        return idx_match.group(0)
+        return idx_match.group(0).upper()
+    match = re.search(r"\b[A-Z]{1,6}\b", text)
+    if match:
+        return match.group(0).upper()
     return None
 
 

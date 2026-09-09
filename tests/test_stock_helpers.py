@@ -50,6 +50,10 @@ class StockHelperTests(unittest.TestCase):
     def test_normalize_stock_candidates_boeing_alias(self):
         self.assertEqual(normalize_stock_candidates("보잉"), ["BA"])
 
+    def test_extract_first_ticker_prefers_full_krx_symbol(self):
+        self.assertEqual(_extract_first_ticker("000660.KS"), "000660.KS")
+        self.assertEqual(_extract_first_ticker("The ticker is 000660.KS."), "000660.KS")
+
     def test_extract_krx_code_candidates_from_search_items(self):
         items = [
             {
