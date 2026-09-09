@@ -17,10 +17,12 @@ services:
     volumes:
       - ./redroid-data:/data
     command:
-      - androidboot.redroid_gpu_mode=guest
+      - androidboot.redroid_gpu_mode=host
       - androidboot.redroid_width=720
       - androidboot.redroid_height=1280
       - androidboot.redroid_dpi=320
+    devices:
+      - "/dev/dri:/dev/dri" # 호스트 GPU 패스스루 (Chrome 렌더링에 필수)
     ports:
       - "127.0.0.1:5555:5555" # adb
       - "127.0.0.1:3000:3000" # Iris HTTP API (/reply, /query, /dashboard)
