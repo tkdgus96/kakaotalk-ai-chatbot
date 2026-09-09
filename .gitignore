@@ -18,3 +18,9 @@ data/
 # Claude/OMC local config
 .claude/
 .omc/
+
+# Node deps (ws-scrcpy tooling)
+node_modules/
+
+# Local env backups
+.env.bak.*
