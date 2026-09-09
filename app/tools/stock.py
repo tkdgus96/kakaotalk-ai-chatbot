@@ -312,6 +312,15 @@ async def _fetch_kis_krx_quote(client: httpx.AsyncClient, code: str):
 
 
 async def _fetch_naver_krx_quote(client: httpx.AsyncClient, code: str):
+    def signed(value, direction_code):
+        try:
+            num = float(value)
+        except (TypeError, ValueError):
+            return value
+        if str(direction_code) in {"2", "5"}:
+            return -abs(num)
+        return num
+
     try:
         resp = await client.get(
             "https://polling.finance.naver.com/api/realtime",
@@ -331,7 +340,10 @@ async def _fetch_naver_krx_quote(client: httpx.AsyncClient, code: str):
                 inner = raw_text[raw_text.find("(") + 1 : raw_text.rfind(")")]
                 data = json.loads(inner)
             else:
-                data = json.loads(raw_text)
+                try:
+                    data = json.loads(raw_text)
+                except Exception:
+                    data = json.loads(resp.content.decode(resp.encoding or "utf-8"))
         except Exception:
             return None, None
 
@@ -352,8 +364,8 @@ async def _fetch_naver_krx_quote(client: httpx.AsyncClient, code: str):
             "currency": "KRW",
             "marketState": item.get("ms"),
             "regularMarketPrice": item.get("nv"),
-            "regularMarketChange": item.get("cv"),
-            "regularMarketChangePercent": item.get("cr"),
+            "regularMarketChange": signed(item.get("cv"), item.get("rf")),
+            "regularMarketChangePercent": signed(item.get("cr"), item.get("rf")),
             "regularMarketPreviousClose": item.get("pcv"),
             "regularMarketOpen": item.get("ov"),
             "regularMarketDayLow": item.get("lv"),
