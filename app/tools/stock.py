@@ -219,6 +219,50 @@ async def _resolve_with_naver(client: httpx.AsyncClient, raw_query: str):
     return None
 
 
+def _strip_html(text: str | None) -> str:
+    return re.sub(r"<[^>]+>", "", text or "")
+
+
+def _extract_krx_code_candidates_from_search_items(items: list[dict]) -> list[str]:
+    codes: list[str] = []
+    for item in items:
+        text = " ".join(
+            _strip_html(item.get(key))
+            for key in ("title", "description", "link")
+            if item.get(key)
+        )
+        for code in re.findall(r"\b\d{6}\b", text):
+            codes.append(code)
+    return list(dict.fromkeys(codes))
+
+
+async def _resolve_krx_code_with_naver_search(client: httpx.AsyncClient, raw_query: str):
+    if not (settings.naver_client_id and settings.naver_client_secret):
+        return None
+
+    headers = {
+        "X-Naver-Client-Id": settings.naver_client_id,
+        "X-Naver-Client-Secret": settings.naver_client_secret,
+    }
+    resp = await client.get(
+        "https://openapi.naver.com/v1/search/webkr.json",
+        params={"query": f"{raw_query} 주가 종목코드", "display": 5},
+        headers=headers,
+    )
+    if resp.status_code != 200:
+        return None
+
+    candidates = _extract_krx_code_candidates_from_search_items(resp.json().get("items", []))
+    if not candidates:
+        return None
+
+    for code in candidates:
+        quote, _ = await _fetch_naver_krx_quote(client, code)
+        if quote is not None:
+            return code
+    return candidates[0]
+
+
 def get_krx_code(symbol: str):
     if symbol.isdigit() and len(symbol) == 6:
         return symbol
@@ -478,6 +522,11 @@ async def get_stock_quote(symbol_or_name: str) -> str:
                     if naver_symbol:
                         candidate_symbols.insert(0, naver_symbol)
                         trusted_symbols.add(naver_symbol)
+                        candidate_symbols = list(dict.fromkeys(candidate_symbols))
+                    krx_code = await _resolve_krx_code_with_naver_search(client, raw_query)
+                    if krx_code:
+                        candidate_symbols.insert(0, krx_code)
+                        trusted_symbols.add(krx_code)
                         candidate_symbols = list(dict.fromkeys(candidate_symbols))
 
                     # Free-form names can contain misleading ticker-looking tokens

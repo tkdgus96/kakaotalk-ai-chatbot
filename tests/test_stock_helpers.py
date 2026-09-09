@@ -1,6 +1,13 @@
 import unittest
 
-from app.tools.stock import _extract_first_ticker, _extract_tickers, get_krx_code, is_symbol_like, normalize_stock_candidates
+from app.tools.stock import (
+    _extract_krx_code_candidates_from_search_items,
+    _extract_first_ticker,
+    _extract_tickers,
+    get_krx_code,
+    is_symbol_like,
+    normalize_stock_candidates,
+)
 
 
 class StockHelperTests(unittest.TestCase):
@@ -42,6 +49,16 @@ class StockHelperTests(unittest.TestCase):
 
     def test_normalize_stock_candidates_boeing_alias(self):
         self.assertEqual(normalize_stock_candidates("보잉"), ["BA"])
+
+    def test_extract_krx_code_candidates_from_search_items(self):
+        items = [
+            {
+                "title": "SK Hynix Inc 오늘의 주가 | <b>000660</b> 실시간 티커",
+                "description": "SK<b>하이닉스</b>의 주가, <b>000660</b> 주식",
+                "link": "https://example.com/000660",
+            }
+        ]
+        self.assertEqual(_extract_krx_code_candidates_from_search_items(items), ["000660"])
 
 
 if __name__ == "__main__":
