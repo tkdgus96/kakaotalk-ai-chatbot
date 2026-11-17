@@ -59,6 +59,26 @@ def add_chat_log(room_id: int, sender: str, content: str, now_iso: str) -> None:
         pass
 
 
+def find_sender_by_content(room_id: int, content: str) -> str | None:
+    """Most recent sender in this room who sent exactly `content` (used to name
+    the author of a quoted/replied-to message; Iris only gives a user_id)."""
+    if not _ensure_fts_available():
+        return None
+    content = (content or "").strip()
+    if not content:
+        return None
+    try:
+        with get_conn() as conn:
+            row = conn.execute(
+                "SELECT sender FROM chat_log_fts WHERE room_id = ? AND content = ? "
+                "ORDER BY created_at DESC LIMIT 1",
+                (str(room_id), content),
+            ).fetchone()
+        return str(row["sender"]) if row else None
+    except Exception:
+        return None
+
+
 def _build_match(query: str) -> str | None:
     """Turn a free-form query into a trigram MATCH expression.
 

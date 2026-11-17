@@ -48,6 +48,10 @@ class Settings:
     playground_sender: str
     prompt_variant_overrides: dict[int, str]
     default_prompt_variant: str
+    llm_provider: str
+    chat_model: str
+    fact_model: str
+    fallback_model: str
     enable_model_routing: bool
     light_model: str
     image_gen_model: str
@@ -59,6 +63,8 @@ class Settings:
     iris_base_url: str
     iris_bot_triggers: list[str]
     iris_self_names: set[str]
+    iris_reply_to_bot_is_command: bool
+    iris_mention_is_command: bool
     iris_room_map_seed: str
     enable_iris_sender: bool
     iris_sender_interval_seconds: int
@@ -80,6 +86,10 @@ class Settings:
     chat_per_min_limit: int
     chat_log_retention_days: int
     admin_room_id: int
+    admin_senders: set[str]
+    report_channels: set[str]
+    report_chat_id: int
+    report_weekly_weekday: int
     bot_shared_token: str | None
     enable_grounded_search: bool
     web_search_model: str
@@ -117,6 +127,13 @@ settings = Settings(
     playground_sender=os.getenv("PLAYGROUND_SENDER", "dev_user"),
     prompt_variant_overrides=_parse_variant_overrides(os.getenv("PROMPT_VARIANT_OVERRIDES", "")),
     default_prompt_variant=os.getenv("DEFAULT_PROMPT_VARIANT", "default"),
+    # Chat model specs: "<model>" (LLM_PROVIDER) or "<provider>:<model>" — see app/llm_factory.py.
+    # Defaults stay on OpenAI; a non-OpenAI provider is only used if named here explicitly.
+    llm_provider=os.getenv("LLM_PROVIDER", "openai"),
+    chat_model=os.getenv("CHAT_MODEL", "gpt-4o"),
+    fact_model=os.getenv("FACT_MODEL", "gpt-4o-mini"),
+    # Tried when the primary chat call raises (rate limit/outage). Empty = off.
+    fallback_model=os.getenv("LLM_FALLBACK_MODEL", ""),
     enable_model_routing=os.getenv("ENABLE_MODEL_ROUTING", "true").lower() in {"1", "true", "yes", "on"},
     light_model=os.getenv("LIGHT_MODEL", "gpt-4o-mini"),
     image_gen_model=os.getenv("IMAGE_GEN_MODEL", "gpt-image-1"),
@@ -134,6 +151,11 @@ settings = Settings(
     iris_base_url=os.getenv("IRIS_BASE_URL", "http://127.0.0.1:3000"),
     iris_bot_triggers=[t.strip() for t in os.getenv("IRIS_BOT_TRIGGERS", "!,！").split(",") if t.strip()],
     iris_self_names={n.strip() for n in os.getenv("IRIS_SELF_NAMES", "온반봇").split(",") if n.strip()},
+    # A KakaoTalk reply to one of the bot's own messages counts as addressing
+    # the bot (no "!" needed).
+    iris_reply_to_bot_is_command=os.getenv("IRIS_REPLY_TO_BOT_IS_COMMAND", "true").lower() in {"1", "true", "yes", "on"},
+    # "@봇이름 질문" (KakaoTalk mention of the bot account) counts as addressing the bot.
+    iris_mention_is_command=os.getenv("IRIS_MENTION_IS_COMMAND", "true").lower() in {"1", "true", "yes", "on"},
     iris_room_map_seed=os.getenv("IRIS_ROOM_MAP", ""),
     enable_iris_sender=os.getenv("ENABLE_IRIS_SENDER", "false").lower() in {"1", "true", "yes", "on"},
     iris_sender_interval_seconds=int(os.getenv("IRIS_SENDER_INTERVAL_SECONDS", "5")),
@@ -155,6 +177,13 @@ settings = Settings(
     chat_per_min_limit=int(os.getenv("CHAT_PER_MIN_LIMIT", "8")),
     chat_log_retention_days=int(os.getenv("CHAT_LOG_RETENTION_DAYS", "0")),
     admin_room_id=int(os.getenv("ADMIN_ROOM_ID", "0")),
+    # Who may run !리포트 (KakaoTalk display names). admin_room_id also grants it.
+    admin_senders={n.strip() for n in os.getenv("ADMIN_SENDERS", "").split(",") if n.strip()},
+    # Ops report delivery: "email" (SMTP alert channel), "kakao" (bot_outbox -> REPORT_CHAT_ID).
+    report_channels={c.strip().lower() for c in os.getenv("REPORT_CHANNELS", "email,kakao").split(",") if c.strip()},
+    report_chat_id=int(os.getenv("REPORT_CHAT_ID") or os.getenv("HEALTH_SELF_CHAT_ID", "0") or "0"),
+    # Weekly report weekday (0=Mon .. 6=Sun); -1 disables the weekly report.
+    report_weekly_weekday=int(os.getenv("REPORT_WEEKLY_WEEKDAY", "0")),
     bot_shared_token=os.getenv("BOT_SHARED_TOKEN") or None,
     enable_grounded_search=os.getenv("ENABLE_GROUNDED_SEARCH", "true").lower() in {"1", "true", "yes", "on"},
     web_search_model=os.getenv("WEB_SEARCH_MODEL", "gpt-4o"),

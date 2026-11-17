@@ -103,7 +103,7 @@ def _to_send_jpeg_b64(raw: bytes, max_dim: int = 1280, quality: int = 85) -> str
 
 
 async def describe_image(url: str, question: str) -> str | None:
-    """Download the image and ask gpt-4o (vision) about it."""
+    """Download the image and ask the chat model (vision) about it."""
     got = await _download_b64(url)
     if not got:
         return None
@@ -122,7 +122,9 @@ async def describe_image(url: str, question: str) -> str | None:
         )
         from app.services.usage_service import record_message_usage
 
-        record_message_usage(resp, "vision", "gpt-4o")
+        from app.llm_factory import model_name
+
+        record_message_usage(resp, "vision", model_name(settings.chat_model))
         return resp.content if isinstance(resp.content, str) else str(resp.content)
     except Exception as e:
         logger.warning("vision describe failed: %s", e)

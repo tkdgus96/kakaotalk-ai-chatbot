@@ -26,7 +26,7 @@ import httpx
 from app.boss.utils.week import now_kst
 from app.config import settings
 from app.dependencies import logger
-from app.services.alert_service import send_alert, send_cost_report
+from app.services.alert_service import send_alert
 
 _CHECK_INTERVAL_SEC = 60
 _ALERT_REPEAT_SEC = 3600  # re-alert hourly while still down
@@ -179,7 +179,13 @@ class HealthMonitor:
             self._last_alert_at = now_ts
 
     async def _maybe_cost_report(self, now: datetime):
+        """Daily ops report at COST_REPORT_HOUR; weekly report on
+        REPORT_WEEKLY_WEEKDAY at the same hour (in addition to the daily one)."""
         today = now.strftime("%Y-%m-%d")
         if now.hour == settings.cost_report_hour and self._last_cost_report_date != today:
             self._last_cost_report_date = today
-            await send_cost_report()
+            from app.services.report_service import deliver_report
+
+            await deliver_report("daily", self.repo)
+            if settings.report_weekly_weekday >= 0 and now.weekday() == settings.report_weekly_weekday:
+                await deliver_report("weekly", self.repo)

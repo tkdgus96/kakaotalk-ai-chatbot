@@ -1,4 +1,5 @@
 import asyncio
+import time
 from datetime import datetime
 
 from langchain_community.chat_message_histories import SQLChatMessageHistory
@@ -6,6 +7,7 @@ from langchain_core.documents import Document
 from langchain_core.messages import AIMessage, HumanMessage, SystemMessage
 
 from app.boss.services.command_parser import parse_command
+from app.boss.utils.week import KST
 from app.chat_log import add_chat_log
 from app.config import settings
 from app.dependencies import boss_service, llm, logger, message_buffers, vectorstore
@@ -23,6 +25,8 @@ from app.services.memory_service import handle_memory_command
 from app.services.game_stats import handle_game_command
 from app.services.summary_service import handle_summary_command
 from app.services.feedback_service import maybe_log_correction
+from app.services.ops_service import ToolUsageCallback, record_event
+from app.services.report_service import handle_report_command
 
 
 async def flush_buffer(room_id: int):
@@ -73,12 +77,42 @@ def _help_text() -> str:
         "• 이미지 생성: !그림 [설명] 또는 !<설명> 그려줘\n"
         "• 이미지 검색: !이미지 [검색어]\n"
         "• 사진 이해: 사진 올린 뒤 !이 사진 뭐야\n"
+        "• 답장: 봇 메시지에 답장하면 ! 없이도 이어서 질문 가능. 다른 사람 메시지에 답장하며 !질문하면 그 메시지 기준으로 답해\n"
         "• 기억: !기억 / !기억삭제 [키워드] / !기억끄기 / !기억켜기\n"
         "• 대화 요약: !요약 [오늘|어제|N일]\n"
         "• 게임 랭킹: !기록 / !단어기록 / !챌린지기록 / !내기록 (기간: 주/월/오늘)\n"
         "• 보스: !보스도움\n"
+        "• 운영 리포트(관리자): !리포트 [오늘|주간|N일]\n"
         "• 반복/예약 알림: 그냥 '매일 아침 8시에 날씨 알려줘', '매주 월요일 9시에 ~' 처럼 말하면 등록돼"
     )
+
+
+_QUOTE_MAX_CHARS = 300
+
+
+def _format_quote(data: KakaoMsg) -> str:
+    """Render the replied-to message (KakaoTalk 답장) as a compact context line."""
+    text = (data.quoted_text or "").strip()
+    if not text:
+        return ""
+    if len(text) > _QUOTE_MAX_CHARS:
+        text = text[:_QUOTE_MAX_CHARS] + "…"
+    who = (data.quoted_sender or "").strip()
+    head = f"[{who}]" if who else "[알 수 없음]"
+    return f"(답장 대상 {head}: {text})"
+
+
+def _inbound_delay_ms(sent_at: str | None) -> int | None:
+    """KakaoTalk send time -> now (KST). None when unknown or implausible."""
+    if not sent_at:
+        return None
+    try:
+        sent = datetime.fromisoformat(sent_at).replace(tzinfo=None)
+        now = datetime.now(KST).replace(tzinfo=None)
+        ms = int((now - sent).total_seconds() * 1000)
+        return ms if -60_000 <= ms <= 3_600_000 else None
+    except ValueError:
+        return None
 
 
 async def handle_chat(data: KakaoMsg):
@@ -95,6 +129,8 @@ async def handle_chat(data: KakaoMsg):
             answer = handle_game_command(data.room_id, data.sender, parsed.name, parsed.args)
         if answer is None:
             answer = await handle_summary_command(data.room_id, parsed.name, parsed.args)
+        if answer is None:
+            answer = await handle_report_command(data.room_id, data.sender, parsed.name, parsed.args)
         if answer is None and parsed.name == "!도움말":
             answer = _help_text()
         if answer is not None:
@@ -118,15 +154,21 @@ async def handle_chat(data: KakaoMsg):
     # generate_image / analyze_image tools. Explicit !그림/!이미지/!짤 commands above
     # stay deterministic; natural-language requests flow through to the graph.
 
+    # Prefer KakaoTalk's own send time (Iris) over our receive time.
     await asyncio.to_thread(
-        add_chat_log, data.room_id, data.sender, data.msg, datetime.now().isoformat()
+        add_chat_log, data.room_id, data.sender, data.msg, data.sent_at or datetime.now().isoformat()
     )
 
     # Feedback loop: capture corrections that directly follow a bot answer.
     await asyncio.to_thread(maybe_log_correction, data.room_id, data.sender, data.msg)
 
+    quoted_context = _format_quote(data)
+
     if not data.is_command:
-        message_buffers[data.room_id].append(f"[{data.sender}]: {data.msg}")
+        entry = f"[{data.sender}]: {data.msg}"
+        if quoted_context:
+            entry += f" {quoted_context}"
+        message_buffers[data.room_id].append(entry)
         if len(message_buffers[data.room_id]) >= settings.buffer_size:
             await flush_buffer(data.room_id)
         return {"answer": ""}
@@ -134,6 +176,7 @@ async def handle_chat(data: KakaoMsg):
     # Per-room chat throttle: protect against spam-driven LLM cost.
     if not allow_chat(data.room_id, settings.chat_per_min_limit):
         logger.info("chat throttled room_id=%s", data.room_id)
+        await asyncio.to_thread(record_event, "throttle", "chat", data.room_id, data.sender)
         return {"answer": ""}
 
     history = SQLChatMessageHistory(
@@ -155,21 +198,49 @@ async def handle_chat(data: KakaoMsg):
     buffer_context = "\n".join(recent_buffer) if recent_buffer else ""
 
     start_image_collection(data.room_id)
-    result = await graph.ainvoke(
-        {
-            "messages": graph_messages,
-            "buffer_context": buffer_context,
-        },
-        config={"configurable": {"room_id": data.room_id, "sender": data.sender}},
-    )
+    tool_cb = ToolUsageCallback(data.room_id, data.sender)
+    inbound_ms = _inbound_delay_ms(data.sent_at)
+    t0 = time.monotonic()
+    turn_ok = True
+    try:
+        result = await graph.ainvoke(
+            {
+                "messages": graph_messages,
+                "buffer_context": buffer_context,
+                "quoted_context": quoted_context,
+                "mentioned_names": list(data.mentioned_names or []),
+            },
+            config={
+                "configurable": {
+                    "room_id": data.room_id,
+                    "sender": data.sender,
+                    "sender_id": data.sender_id,
+                },
+                "callbacks": [tool_cb],
+            },
+        )
+    except Exception:
+        turn_ok = False
+        await asyncio.to_thread(
+            record_event, "turn", "chat", data.room_id, data.sender, False,
+            int((time.monotonic() - t0) * 1000), f"tools={len(tool_cb.calls)} exception", inbound_ms,
+        )
+        raise
 
     answer = ""
     for m in reversed(result["messages"]):
         if isinstance(m, AIMessage) and m.content and not getattr(m, "tool_calls", None):
             answer = m.content if isinstance(m.content, str) else str(m.content)
             break
+    await asyncio.to_thread(
+        record_event, "turn", "chat", data.room_id, data.sender, bool(answer) and turn_ok,
+        int((time.monotonic() - t0) * 1000), f"tools={len(tool_cb.calls)}", inbound_ms,
+    )
 
-    history.add_user_message(f"[{data.sender}]: {data.msg}")
+    user_line = f"[{data.sender}]: {data.msg}"
+    if quoted_context:
+        user_line += f"\n{quoted_context}"
+    history.add_user_message(user_line)
     history.add_ai_message(answer)
 
     images = take_generated_images(data.room_id)

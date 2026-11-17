@@ -16,6 +16,18 @@ from app.dependencies import logger
 PRICING = {
     "gpt-4o": (2.50, 10.00),
     "gpt-4o-mini": (0.15, 0.60),
+    "gpt-4.1": (2.00, 8.00),
+    "gpt-4.1-mini": (0.40, 1.60),
+    "gpt-4.1-nano": (0.10, 0.40),
+    "gpt-5": (1.25, 10.00),
+    "gpt-5-mini": (0.25, 2.00),
+    "gpt-5-nano": (0.05, 0.40),
+    "o4-mini": (1.10, 4.40),
+    # Non-OpenAI (only billed if explicitly configured via CHAT_MODEL/LLM_FALLBACK_MODEL).
+    "claude-sonnet-4-5": (3.00, 15.00),
+    "claude-haiku-4-5": (1.00, 5.00),
+    "gemini-2.5-flash": (0.30, 2.50),
+    "gemini-2.5-pro": (1.25, 10.00),
 }
 IMAGE_PRICING = {
     "gpt-image-1": 0.04,
@@ -27,8 +39,25 @@ _DEFAULT_TOKEN_RATE = (2.50, 10.00)
 _DEFAULT_IMAGE_COST = 0.01
 
 
+def _price_key(model: str) -> str:
+    """Strip a provider prefix ("anthropic:claude-x" -> "claude-x") and a
+    dated suffix ("gpt-4o-2024-08-06" -> "gpt-4o") for table lookup."""
+    name = (model or "").split(":", 1)[-1]
+    if name in PRICING:
+        return name
+    import re
+
+    base = re.sub(r"-\d{4}-\d{2}-\d{2}$", "", name)
+    if base in PRICING:
+        return base
+    for key in sorted(PRICING, key=len, reverse=True):
+        if name.startswith(key):
+            return key
+    return name
+
+
 def _token_cost(model: str, prompt_tokens: int, completion_tokens: int) -> float:
-    rate_in, rate_out = PRICING.get(model, _DEFAULT_TOKEN_RATE)
+    rate_in, rate_out = PRICING.get(_price_key(model), _DEFAULT_TOKEN_RATE)
     return (prompt_tokens * rate_in + completion_tokens * rate_out) / 1_000_000
 
 

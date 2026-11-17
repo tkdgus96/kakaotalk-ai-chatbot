@@ -1,8 +1,8 @@
 """Out-of-band alerts via email (SMTP).
 
 KakaoTalk problems (logout / session / Iris down) mean the bot can't notify
-through the chat itself, so alerts go over email instead. Also used for the
-periodic OpenAI spend report.
+through the chat itself, so alerts go over email instead. The periodic ops /
+spend report (`app/services/report_service.py`) also goes through `send_alert`.
 """
 
 from __future__ import annotations
@@ -86,46 +86,3 @@ async def fetch_openai_spend_usd(days: int = 1) -> float | None:
     except Exception as e:
         logger.warning("costs api failed: %s", e)
         return None
-
-
-async def send_cost_report() -> bool:
-    """Email recent OpenAI spend. Uses our own usage tracking (always available)
-    and, if an Admin key is set, the authoritative Costs API too. No official
-    'remaining balance' API exists, so we report spend, not balance."""
-    from app.services.usage_service import spend_breakdown, spend_since_usd
-
-    tracked_day = spend_since_usd(1)
-    tracked_week = spend_since_usd(7)
-    admin_day = await fetch_openai_spend_usd(1)
-    admin_week = await fetch_openai_spend_usd(7)
-
-    lines = ["OpenAI 사용액 리포트", ""]
-    lines.append("[자체 추적 추정]")
-    lines.append(f"- 최근 24시간: ${tracked_day:.3f}")
-    lines.append(f"- 최근 7일: ${tracked_week:.3f}")
-    breakdown = spend_breakdown(1)
-    if breakdown:
-        lines.append("- 24시간 종류별: " + ", ".join(f"{k} ${v:.3f}" for k, v in breakdown))
-    if admin_day is not None or admin_week is not None:
-        lines.append("")
-        lines.append("[OpenAI 청구 기준(Admin API)]")
-        if admin_day is not None:
-            lines.append(f"- 최근 24시간: ${admin_day:.2f}")
-        if admin_week is not None:
-            lines.append(f"- 최근 7일: ${admin_week:.2f}")
-    lines.append("")
-    lines.append("※ OpenAI는 '남은 잔액' API를 제공하지 않아 사용액만 표시합니다.")
-
-    try:
-        from app.services.feedback_service import recent_feedback
-
-        fb = recent_feedback(1)
-        if fb:
-            lines.append("")
-            lines.append(f"[사용자 오답 지적 {len(fb)}건 (최근 24h)]")
-            for f in fb[:5]:
-                q = (f.get("prev_question") or "").replace("\n", " ")[:40]
-                lines.append(f"- {f.get('sender')}: \"{f.get('correction','')[:30]}\" (질문: {q})")
-    except Exception:
-        pass
-    return await send_alert("일일 사용액 리포트", "\n".join(lines))

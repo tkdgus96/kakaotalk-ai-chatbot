@@ -22,14 +22,25 @@ from __future__ import annotations
 import asyncio
 import json as jsonlib
 from dataclasses import dataclass
+from datetime import datetime
 
 import httpx
 
 from app.boss.db import get_conn
-from app.boss.utils.week import now_kst
+from app.boss.utils.week import KST, now_kst
 from app.config import settings
 from app.dependencies import logger
 from app.models import KakaoMsg
+
+
+@dataclass(frozen=True)
+class QuotedMessage:
+    """The message a KakaoTalk 답장(reply) points at."""
+
+    text: str
+    src_type: int | None = None
+    src_user_id: int | None = None
+    src_log_id: int | None = None
 
 
 @dataclass(frozen=True)
@@ -39,6 +50,142 @@ class IrisMessage:
     sender: str
     msg: str
     image_urls: tuple[str, ...] = ()
+    quoted: QuotedMessage | None = None
+    user_id: int | None = None
+    msg_type: int | None = None
+    kind: str = "text"
+    sent_at: datetime | None = None  # KakaoTalk's own timestamp (KST, naive)
+    mentioned_user_ids: tuple[int, ...] = ()
+
+
+# KakaoTalk chat_logs.type -> coarse kind. (Community-documented values; unknown
+# types fall back to "text" when there is message text, else "other".)
+_TYPE_KINDS: dict[int, str] = {
+    0: "feed",          # system feed: join/leave/invite/kick/delete...
+    1: "text",
+    2: "photo",
+    3: "video",
+    4: "contact",
+    5: "audio",
+    6: "emoticon",      # animated emoticon
+    10: "schedule",
+    12: "emoticon",
+    16: "location",
+    18: "file",
+    20: "emoticon_text",  # emoticon with caption text
+    23: "search",
+    24: "post",
+    25: "emoticon",
+    26: "reply",
+    27: "photo",        # legacy multi-photo
+    71: "photo",        # multi-photo
+}
+# Kinds that carry no text of their own: log a placeholder so room summaries
+# still see that something was shared; never run the LLM on them.
+_PLACEHOLDER_KINDS = {"video", "audio", "file", "location", "contact", "schedule"}
+# Kinds dropped entirely (noise for memory/summaries).
+IGNORED_KINDS = {"feed", "emoticon"}
+
+
+def classify_message(msg_type, msg: str, attachment: dict | None) -> tuple[str, str]:
+    """Return (kind, text). For text-less kinds `text` is a Korean placeholder
+    such as "(파일: 보고서.pdf)"; for emoticon-only messages it is ""."""
+    t = _as_int(msg_type)
+    kind = _TYPE_KINDS.get(t, "text" if msg else "other") if t is not None else "text"
+    att = attachment or {}
+    if kind == "emoticon":
+        return kind, ""
+    if kind == "emoticon_text":
+        return "text", msg
+    if kind == "reply":
+        return "text", msg
+    if kind in _PLACEHOLDER_KINDS:
+        if kind == "file":
+            name = str(att.get("name") or "").strip()
+            return kind, f"(파일: {name})" if name else "(파일)"
+        if kind == "location":
+            title = str(att.get("t") or att.get("title") or "").strip()
+            addr = str(att.get("a") or att.get("address") or "").strip()
+            label = " ".join(x for x in (title, addr) if x)
+            return kind, f"(위치 공유: {label})" if label else "(위치 공유)"
+        if kind == "schedule":
+            title = str(att.get("title") or att.get("t") or "").strip()
+            return kind, f"(일정 공유: {title})" if title else "(일정 공유)"
+        return kind, {"video": "(동영상)", "audio": "(음성 메시지)", "contact": "(연락처)"}[kind]
+    if kind == "photo":
+        return kind, msg
+    return kind, msg
+
+
+def _extract_mentions(attachment: dict | None) -> tuple[int, ...]:
+    """`@이름` mentions: attachment {"mentions": [{"user_id": 123, "at": [1], "len": 3}, ...]}."""
+    if not attachment:
+        return ()
+    raw = attachment.get("mentions")
+    if not isinstance(raw, list):
+        return ()
+    out: list[int] = []
+    for m in raw:
+        uid = _as_int((m or {}).get("user_id")) if isinstance(m, dict) else None
+        if uid is not None and uid not in out:
+            out.append(uid)
+    return tuple(out)
+
+
+def _parse_sent_at(raw_created_at) -> datetime | None:
+    """chat_logs.created_at is unix seconds (sometimes ms). -> KST naive datetime."""
+    ts = _as_int(raw_created_at)
+    if ts is None or ts <= 0:
+        return None
+    if ts > 10**11:  # milliseconds
+        ts = ts // 1000
+    try:
+        return datetime.fromtimestamp(ts, tz=KST).replace(tzinfo=None)
+    except (OverflowError, OSError, ValueError):
+        return None
+
+
+def _as_int(v) -> int | None:
+    try:
+        return int(str(v))
+    except (TypeError, ValueError):
+        return None
+
+
+def _parse_attachment(attachment) -> dict | None:
+    if isinstance(attachment, str):
+        try:
+            attachment = jsonlib.loads(attachment)
+        except Exception:
+            return None
+    return attachment if isinstance(attachment, dict) else None
+
+
+def _extract_quote(msg_type, attachment) -> QuotedMessage | None:
+    """KakaoTalk 답장 = type 26. The attachment carries the original message:
+    {"src_message": "...", "src_type": 1, "src_userId": ..., "src_logId": ...,
+     "attach_only": false, "attach_type": ...}. Reply-to-photo has src_type 2
+    and usually an empty src_message."""
+    att = _parse_attachment(attachment)
+    if not att:
+        return None
+    if _as_int(msg_type) != 26 and "src_message" not in att and "src_logId" not in att:
+        return None
+    text = str(att.get("src_message") or "").strip()
+    src_type = _as_int(att.get("src_type"))
+    if not text:
+        if src_type == 2:
+            text = "(사진)"
+        elif src_type in (71,):
+            text = "(사진 여러 장)"
+        else:
+            return None
+    return QuotedMessage(
+        text=text,
+        src_type=src_type,
+        src_user_id=_as_int(att.get("src_userId")),
+        src_log_id=_as_int(att.get("src_logId")),
+    )
 
 
 def _extract_image_urls(msg_type, attachment) -> list[str]:
@@ -90,19 +237,46 @@ def parse_iris_webhook(payload: object) -> IrisMessage | None:
     msg = str(payload.get("msg") or raw.get("message") or "").strip()
     sender = str(payload.get("sender") or "").strip()
     room_name = str(payload.get("room") or "").strip()
+    attachment = _parse_attachment(raw.get("attachment"))
+    msg_type = _as_int(raw.get("type"))
     image_urls = tuple(_extract_image_urls(raw.get("type"), raw.get("attachment")))
+    quoted = _extract_quote(raw.get("type"), raw.get("attachment"))
+    kind, text = classify_message(msg_type, msg, attachment)
     if not sender:
         return None
-    if not msg and not image_urls:
+    if kind in IGNORED_KINDS:
+        return IrisMessage(
+            chat_id=chat_id, room_name=room_name, sender=sender, msg="", kind=kind,
+            msg_type=msg_type, user_id=_as_int(raw.get("user_id")),
+        )
+    if not text and not image_urls:
         return None
     return IrisMessage(
-        chat_id=chat_id, room_name=room_name, sender=sender, msg=msg, image_urls=image_urls
+        chat_id=chat_id,
+        room_name=room_name,
+        sender=sender,
+        msg=text,
+        image_urls=image_urls,
+        quoted=quoted,
+        user_id=_as_int(raw.get("user_id")),
+        msg_type=msg_type,
+        kind=kind,
+        sent_at=_parse_sent_at(raw.get("created_at")),
+        mentioned_user_ids=_extract_mentions(attachment),
     )
 
 
 def is_self_message(message: IrisMessage) -> bool:
-    """Iris sees the bot account's own sent rows in the DB — skip the echo."""
-    return message.sender in settings.iris_self_names
+    """Iris sees the bot account's own sent rows in the DB — skip the echo.
+    Exception: in the bot account's own self-chat (health/report chat) the
+    operator types as the bot, so trigger-prefixed commands there are real
+    input (e.g. `!리포트`) and pass through."""
+    if message.sender not in settings.iris_self_names:
+        return False
+    self_chats = {int(settings.health_self_chat_id or 0), int(settings.report_chat_id or 0)} - {0}
+    if message.chat_id in self_chats and is_command_message(message.msg):
+        return False
+    return True
 
 
 def is_command_message(msg: str) -> bool:
@@ -111,6 +285,70 @@ def is_command_message(msg: str) -> bool:
     Keep IRIS_BOT_TRIGGERS in sync with what the room actually uses."""
     text = msg.strip()
     return any(text.startswith(trigger) for trigger in settings.iris_bot_triggers)
+
+
+def strip_bot_mention(msg: str) -> str:
+    """Remove a leading/trailing "@봇이름" so the LLM sees a clean question."""
+    text = msg.strip()
+    for name in sorted(settings.iris_self_names, key=len, reverse=True):
+        for token in (f"@{name}", name and f"@{name}\u200b"):
+            if not token:
+                continue
+            if text.startswith(token):
+                text = text[len(token):].strip()
+            if text.endswith(token):
+                text = text[: -len(token)].strip()
+    return text or msg.strip()
+
+
+_bot_user_id_cache: dict[str, object] = {"id": None, "ts": 0.0}
+_BOT_ID_TTL = 600.0
+
+
+async def get_bot_user_id(client: IrisClient | None = None) -> int | None:
+    """The bot account's KakaoTalk user_id from Iris `/config` (cached)."""
+    import time
+
+    if _bot_user_id_cache["id"] is not None and time.time() - float(_bot_user_id_cache["ts"]) < _BOT_ID_TTL:
+        return _bot_user_id_cache["id"]  # type: ignore[return-value]
+    base = (client.base_url if client else settings.iris_base_url).rstrip("/")
+    try:
+        async with httpx.AsyncClient(timeout=5.0) as http:
+            r = await http.get(f"{base}/config")
+        if r.status_code == 200:
+            bot_id = _as_int(r.json().get("bot_id"))
+            _bot_user_id_cache.update(id=bot_id, ts=time.time())
+            return bot_id
+    except Exception as e:
+        logger.debug("iris /config bot_id lookup failed: %s", e)
+    return _bot_user_id_cache["id"]  # type: ignore[return-value]
+
+
+def resolve_quoted_sender(room_id: int, quoted: QuotedMessage, bot_user_id: int | None) -> str:
+    """Best-effort name for the quoted message's author. Iris only gives the
+    KakaoTalk user_id, so: bot id -> bot name; otherwise match the exact text
+    against our own inbound log for this room (most recent first)."""
+    if bot_user_id is not None and quoted.src_user_id == bot_user_id:
+        return next(iter(sorted(settings.iris_self_names)), "봇")
+    try:
+        from app.services.member_service import name_for
+
+        known = name_for(room_id, quoted.src_user_id)
+        if known:
+            return known
+    except Exception:
+        pass
+    if quoted.src_type in (2, 71):
+        return ""
+    try:
+        from app.chat_log import find_sender_by_content
+
+        found = find_sender_by_content(room_id, quoted.text)
+        if found:
+            return found
+    except Exception:
+        pass
+    return ""
 
 
 def resolve_room(chat_id: int, room_name: str) -> tuple[int, str]:
@@ -221,25 +459,76 @@ async def handle_iris_webhook(payload: object) -> dict:
     from app.services.chat_service import handle_chat
     from app.services.image_service import remember_room_image
 
+    from app.services.member_service import migrate_sender_name, names_for, touch_member
+
     message = parse_iris_webhook(payload)
     if message is None:
         logger.info("iris webhook ignored (unparseable): %.200r", payload)
         return {"ok": True, "handled": False}
+    if message.kind in IGNORED_KINDS:
+        # System feeds and emoticon-only messages: no memory/summary value.
+        return {"ok": True, "handled": False, "ignored": message.kind}
     if is_self_message(message):
         return {"ok": True, "handled": False}
 
     room_id, room_name = await asyncio.to_thread(resolve_room, message.chat_id, message.room_name)
 
+    # Stable identity: track user_id -> name; on rename, carry keyed data over.
+    if message.user_id is not None:
+        old_name = await asyncio.to_thread(touch_member, room_id, message.user_id, message.sender)
+        if old_name:
+            await asyncio.to_thread(migrate_sender_name, room_id, old_name, message.sender)
+
     # Cache the latest photo so a following "!이 사진 …" command can be answered.
     if message.image_urls:
         remember_room_image(room_id, message.image_urls[0])
 
+    msg_text = message.msg
+    is_command = is_command_message(msg_text) and message.kind not in _PLACEHOLDER_KINDS
+    bot_user_id: int | None = None
+    if message.quoted or message.mentioned_user_ids:
+        bot_user_id = await get_bot_user_id()
+
+    quoted_text = None
+    quoted_sender = None
+    if message.quoted:
+        quoted_text = message.quoted.text
+        quoted_sender = await asyncio.to_thread(
+            resolve_quoted_sender, room_id, message.quoted, bot_user_id
+        ) or None
+        # Replying to one of the bot's own messages addresses the bot even
+        # without the "!" trigger — treat it as a follow-up question.
+        if (
+            settings.iris_reply_to_bot_is_command
+            and bot_user_id is not None
+            and message.quoted.src_user_id == bot_user_id
+        ):
+            is_command = True
+
+    mentioned_names: list[str] = []
+    if message.mentioned_user_ids:
+        others = [u for u in message.mentioned_user_ids if u != bot_user_id]
+        mentioned_names = await asyncio.to_thread(names_for, room_id, others)
+        if (
+            settings.iris_mention_is_command
+            and bot_user_id is not None
+            and bot_user_id in message.mentioned_user_ids
+        ):
+            is_command = True
+            msg_text = strip_bot_mention(msg_text)
+
     data = KakaoMsg(
         room_id=room_id,
         room=room_name or str(message.chat_id),
-        msg=message.msg,
+        msg=msg_text,
         sender=message.sender,
-        is_command=is_command_message(message.msg),
+        is_command=is_command,
+        quoted_text=quoted_text,
+        quoted_sender=quoted_sender,
+        sender_id=message.user_id,
+        sent_at=message.sent_at.isoformat() if message.sent_at else None,
+        mentioned_names=mentioned_names,
+        msg_kind=message.kind,
     )
     result = await handle_chat(data)
     answer = (result or {}).get("answer") or ""

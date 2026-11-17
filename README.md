@@ -15,6 +15,11 @@ FastAPI-based KakaoTalk chatbot backend with:
 - Message buffering + periodic context summarization
 - RAG retrieval from Chroma before each command response
 - Tool-calling flow (LLM can call external tools during response generation)
+- KakaoTalk 답장(reply) awareness: replying to a message with `!질문` answers about that message;
+  replying to one of the bot's own messages works without the `!` trigger
+- Ops report (`!리포트`, daily/weekly email + KakaoTalk self-chat): requests per room, cost,
+  tool latency/failures, image count, user corrections
+- Provider-agnostic chat model (`CHAT_MODEL`, `LLM_FALLBACK_MODEL`; defaults stay on OpenAI)
 - Dev chat UI via `langgraph dev` + Agent Chat UI (LangGraph `StateGraph` mirrors webhook pipeline: retrieve → chat ↔ tools → store)
 - MapleStory weekly boss management MVP
   - Weekly boss registration and weekly schedule setting
@@ -192,16 +197,19 @@ Examples:
 - `!정산 검마 4`
 - `!정산완료 B105`
 
-## Daily Reminder Commands
+## Reminders
 
-- `!매일 [HH:MM] [메시지]` — 매일 지정 시각에 방으로 메시지 발송. 메시지의 `{N}`은 등록일을 1일차로 하는 일차로 치환
-- `!매일목록`
-- `!매일해제 [id]`
-- `!매일도움`
+Recurring/one-shot reminders are LLM tools, not commands — just say
+`!매일 아침 8시에 날씨 알려줘` or `!매주 월요일 9시에 ~`. (The former `!매일*` commands were retired.)
 
-Examples:
-- `!매일 00:00 허재승 금주 {N}일차`
-- `!매일해제 3`
+## Ops Report (operator)
+
+- `!리포트 [오늘|주간|N일]` — requests per room, estimated cost, tool latency/failures, images,
+  user corrections, injection blocks, reminder deliveries. Allowed for `ADMIN_SENDERS`,
+  inside `ADMIN_ROOM_ID`, or in the bot's self-chat (`REPORT_CHAT_ID`).
+- Scheduled: daily at `COST_REPORT_HOUR`, weekly on `REPORT_WEEKLY_WEEKDAY`, over `REPORT_CHANNELS`
+  (`email` via SMTP alert settings, `kakao` via `bot_outbox` → `REPORT_CHAT_ID`).
+- Data: `llm_usage`, `ops_event` (turn/tool latency, throttles), `feedback_log`, `audit_log`.
 
 ### Room management
 
@@ -233,7 +241,17 @@ Delivery model:
   the payload to `KakaoMsg` and runs the same pipeline. Replies go back via Iris `POST /reply`.
 - `GET /iris/rooms` — current `chat_id -> room_id` mapping (`IRIS_ROOM_MAP` 작성용).
 - `ENABLE_IRIS_SENDER=true` — the backend delivers `bot_outbox` rows itself through Iris
-  (replaces phone polling; exact-time delivery for `!매일` reminders).
+  (replaces phone polling; exact-time delivery for reminders and reports).
+- 답장(reply, KakaoTalk type 26) attachments are parsed: the quoted text and author are passed
+  to the agent; `IRIS_REPLY_TO_BOT_IS_COMMAND=true` makes replies to bot messages count as `!`.
+- `@멘션` attachments are parsed: mentioned members' facts are loaded for the answer, and
+  `@봇이름 질문` counts as `!` (`IRIS_MENTION_IS_COMMAND=true`).
+- Stable identity: `(room_id, user_id) -> name` is tracked in `room_member`; when a member renames
+  themselves, name-keyed data (FTS log, user facts, memory opt-out, feedback/usage) is migrated so
+  history and stats carry over (`app/services/member_service.py`).
+- Message types are classified (`classify_message`): emoticon-only and system-feed rows are dropped;
+  video/audio/file/location/contact/schedule become placeholders like `(파일: a.pdf)` in the room
+  buffer; KakaoTalk's own `created_at` is used as the log timestamp and for the inbound-delay metric.
 - Setup guide: `deploy/iris/README.md` (redroid compose, kernel prereqs, room_id 연속성 매핑, 전환 절차).
 
 ## Tests
@@ -250,6 +268,9 @@ env ANONYMIZED_TELEMETRY=false CHROMA_TELEMETRY=false \
 - Chroma persistent data is stored in `./chroma_db` (shared between webhook and dev UI for cross-session memory).
 - Memory model: recency via `SQLChatMessageHistory`; long-term semantic recall via Chroma `context_summary` docs; verbatim/keyword recall via SQLite FTS5 (`app/chat_log.py`, trigram); per-user facts loaded all-by-key from Chroma. Raw conversation turns are not embedded (avoids cost, noise, and stale-data recall).
 - Search tools: `naver_search` is preferred for Korean topics (faster indexing for same-day news); `web_search` (Tavily) is for global/English content. The system prompt routes the agent between them.
+- Chat models are built by `app/llm_factory.py`. `CHAT_MODEL` / `LIGHT_MODEL` / `FACT_MODEL` accept
+  `"<model>"` (OpenAI) or `"<provider>:<model>"`; non-OpenAI providers need their `langchain-<provider>`
+  package and API key (separate billing). `LLM_FALLBACK_MODEL` is tried when the primary call raises.
 - Stock tool uses multiple sources/fallbacks (KIS → Yahoo → Naver → Tavily on 429); for best KRX reliability, set KIS credentials.
 - Boss MVP schema is in `migrations/001_boss_mvp.sql` and auto-initialized on startup.
 - Outbox/room metadata schema is in `migrations/002_outbox_and_room_metadata.sql` and auto-initialized on startup.

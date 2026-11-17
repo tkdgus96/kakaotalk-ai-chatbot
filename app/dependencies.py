@@ -2,9 +2,10 @@ import logging
 from collections import defaultdict
 
 from langchain_chroma import Chroma
-from langchain_openai import ChatOpenAI, OpenAIEmbeddings
+from langchain_openai import OpenAIEmbeddings
 
 from app.config import settings
+from app.llm_factory import make_chat_model
 from app.boss.repositories.boss_repository import BossRepository
 from app.boss.services.boss_service import BossService
 
@@ -13,12 +14,14 @@ logger = logging.getLogger(__name__)
 
 message_buffers: dict[int, list[str]] = defaultdict(list)
 
-llm = ChatOpenAI(
-    model="gpt-4o",
-    api_key=settings.openai_api_key,
-    temperature=0.7,
-    max_tokens=1000,
-    verbose=True,
+# Main chat model (CHAT_MODEL, default gpt-4o). Provider-agnostic via llm_factory.
+llm = make_chat_model(settings.chat_model, temperature=0.7, max_tokens=1000, verbose=True)
+
+# Optional secondary model tried when the primary raises (LLM_FALLBACK_MODEL).
+fallback_llm = (
+    make_chat_model(settings.fallback_model, temperature=0.7, max_tokens=1000)
+    if settings.fallback_model
+    else None
 )
 
 embeddings = OpenAIEmbeddings(api_key=settings.openai_api_key)
@@ -34,18 +37,9 @@ user_profile_store = Chroma(
 )
 
 # Cheap model for clearly-casual turns (see _needs_full_model in app/graph.py).
-light_llm = ChatOpenAI(
-    model=settings.light_model,
-    api_key=settings.openai_api_key,
-    temperature=0.7,
-    max_tokens=1000,
-)
+light_llm = make_chat_model(settings.light_model, temperature=0.7, max_tokens=1000)
 
-fact_extractor_llm = ChatOpenAI(
-    model="gpt-4o-mini",
-    api_key=settings.openai_api_key,
-    temperature=0,
-)
+fact_extractor_llm = make_chat_model(settings.fact_model, temperature=0)
 
 boss_repo = BossRepository()
 boss_service = BossService(boss_repo)

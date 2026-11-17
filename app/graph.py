@@ -21,7 +21,8 @@ from app.chat_log import (
     set_cached_chat_summary,
 )
 from app.config import settings
-from app.dependencies import fact_extractor_llm, light_llm, llm, user_profile_store, vectorstore
+from app.dependencies import fact_extractor_llm, fallback_llm, light_llm, llm, user_profile_store, vectorstore
+from app.llm_factory import model_name, with_fallback
 from app.memory_policy import validate_memory_fact
 from app.persona import ensure_persona
 from app.room_topics import ensure_room_topics, get_room_topic_expansions
@@ -65,13 +66,25 @@ JSON으로만 답해. 다른 텍스트 금지.
 추출할 사실이 없으면 {{"facts": []}}.
 """
 
-llm_with_tools = llm.bind_tools(tools)
+CHAT_MODEL_NAME = model_name(settings.chat_model)
+
+
+def _bind(**kw):
+    """Bind tools on the primary model, with the optional fallback model bound
+    the same way and tried on error (LLM_FALLBACK_MODEL)."""
+    primary = llm.bind_tools(tools, **kw)
+    fb = fallback_llm.bind_tools(tools, **kw) if fallback_llm is not None else None
+    return with_fallback(primary, fb)
+
+
+llm_plain = with_fallback(llm, fallback_llm)
+llm_with_tools = _bind()
 light_llm_with_tools = light_llm.bind_tools(tools)
-llm_with_tools_required = llm.bind_tools(tools, tool_choice="required")
+llm_with_tools_required = _bind(tool_choice="required")
 # Force the image tool specifically: gpt-4o sometimes refuses in text ("직접
 # 그려줄 순 없지만…") instead of calling generate_image. When the message clearly
 # asks to draw/create a picture but no tool was called, we retry forcing this one.
-llm_force_image = llm.bind_tools(tools, tool_choice="generate_image")
+llm_force_image = _bind(tool_choice="generate_image")
 
 
 class ChatState(TypedDict):
@@ -81,6 +94,8 @@ class ChatState(TypedDict):
     mentioned_facts: str
     room_persona: str
     buffer_context: str
+    quoted_context: str
+    mentioned_names: list[str]
     room_id: int
     sender: str
     _forced_tool: bool
@@ -467,7 +482,13 @@ async def retrieve(state: ChatState, config) -> dict:
             ),
         )
 
-    mentioned = _detect_mentioned_members(query, room_senders, sender)
+    # Explicit @mentions (KakaoTalk mention attachment, resolved to names) come
+    # first; name-substring detection fills in the rest.
+    mentioned = [n for n in (state.get("mentioned_names") or []) if n and n != sender]
+    for n in _detect_mentioned_members(query, room_senders, sender):
+        if n not in mentioned:
+            mentioned.append(n)
+    mentioned = mentioned[:3]
     mentioned_fact_lists = await asyncio.gather(
         *(asyncio.to_thread(_load_user_facts, room_id, member) for member in mentioned)
     )
@@ -590,6 +611,13 @@ async def chat(state: ChatState) -> dict:
     buffer_context = state.get("buffer_context", "")
     if buffer_context:
         system_content += f"\n\n최근 채팅방 대화 (아직 저장 전):\n{buffer_context}"
+    quoted_context = state.get("quoted_context", "")
+    if quoted_context:
+        system_content += (
+            "\n\n사용자가 특정 메시지에 '답장'으로 이 질문을 보냈어. 질문의 '이거/그거/저 말/이 사람' 등은 "
+            "아래 답장 대상 메시지를 가리키는 것으로 해석하고, 그 메시지를 기준으로 답해:\n"
+            f"{quoted_context}"
+        )
 
     # Let the LLM judge image intent (generate vs describe) and call the tool.
     from app.services.image_service import get_recent_room_image
@@ -599,8 +627,8 @@ async def chat(state: ChatState) -> dict:
 
     messages = [SystemMessage(content=system_content)] + list(state["messages"])
     if _should_answer_from_retrieved_context(query, context):
-        response = await llm.ainvoke(messages)
-        used_model = "gpt-4o"
+        response = await llm_plain.ainvoke(messages)
+        used_model = CHAT_MODEL_NAME
     elif settings.enable_model_routing and not _needs_full_model(query) and not has_recent_image:
         response = await light_llm_with_tools.ainvoke(messages)
         used_model = settings.light_model
@@ -608,7 +636,7 @@ async def chat(state: ChatState) -> dict:
         # Image requests (and any message with a recent image to reason about)
         # stay on the full model so tool-calling is reliable.
         response = await llm_with_tools.ainvoke(messages)
-        used_model = "gpt-4o"
+        used_model = CHAT_MODEL_NAME
 
     # Reliability backstop for the LLM's own capability-refusal: if it answered
     # in text with "I can't generate images" instead of calling the tool, force
@@ -621,7 +649,7 @@ async def chat(state: ChatState) -> dict:
         and _is_image_capability_refusal(response.content)
     ):
         forced = await llm_force_image.ainvoke(messages)
-        record_message_usage_safe(forced, "chat", "gpt-4o", room_id, sender)
+        record_message_usage_safe(forced, "chat", CHAT_MODEL_NAME, room_id, sender)
         return {"messages": [forced], "_forced_tool": True}
 
     # Anti-hallucination: if the question needs fresh/computed facts but the
@@ -636,7 +664,7 @@ async def chat(state: ChatState) -> dict:
             "도구(web_search/get_stock_quote/get_weather/calculate 등)를 호출해서 확인한 뒤 답해."
         )
         forced = await llm_with_tools_required.ainvoke(messages + [nudge])
-        record_message_usage_safe(forced, "chat", "gpt-4o", room_id, sender)
+        record_message_usage_safe(forced, "chat", CHAT_MODEL_NAME, room_id, sender)
         return {"messages": [forced], "_forced_tool": True}
 
     record_message_usage_safe(response, "chat", used_model, room_id, sender)

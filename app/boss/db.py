@@ -202,6 +202,38 @@ CREATE TABLE IF NOT EXISTS room_topics (
   computed_at TEXT NOT NULL
 );
 
+CREATE TABLE IF NOT EXISTS ops_event (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  kind TEXT NOT NULL,            -- tool | turn | throttle
+  name TEXT NOT NULL,            -- tool name, or "chat" for turns
+  room_id INTEGER,
+  sender TEXT,
+  ok INTEGER NOT NULL DEFAULT 1,
+  latency_ms INTEGER,
+  inbound_ms INTEGER,            -- KakaoTalk send time -> server receive (Iris delay)
+  detail TEXT,
+  created_at TEXT NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_ops_event_created ON ops_event(created_at);
+
+CREATE TABLE IF NOT EXISTS room_member (
+  room_id INTEGER NOT NULL,
+  user_id INTEGER NOT NULL,      -- KakaoTalk user_id (stable across renames)
+  name TEXT NOT NULL,            -- current display name (the key used elsewhere)
+  first_seen_at TEXT NOT NULL,
+  last_seen_at TEXT NOT NULL,
+  PRIMARY KEY (room_id, user_id)
+);
+
+CREATE TABLE IF NOT EXISTS room_member_alias (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  room_id INTEGER NOT NULL,
+  user_id INTEGER NOT NULL,
+  old_name TEXT NOT NULL,
+  new_name TEXT NOT NULL,
+  changed_at TEXT NOT NULL
+);
+
 CREATE TABLE IF NOT EXISTS chat_summary_cache (
   room_id INTEGER NOT NULL,
   date_label TEXT NOT NULL,
@@ -218,6 +250,7 @@ CREATE TABLE IF NOT EXISTS chat_summary_cache (
         for stmt in (
             "ALTER TABLE recurring_reminder ADD COLUMN dynamic INTEGER NOT NULL DEFAULT 0",
             "ALTER TABLE recurring_reminder ADD COLUMN days_of_week TEXT NOT NULL DEFAULT ''",
+            "ALTER TABLE ops_event ADD COLUMN inbound_ms INTEGER",
         ):
             try:
                 conn.execute(stmt)
