@@ -1,5 +1,6 @@
 import time
 import unittest
+from unittest import mock
 
 from app.services import image_service as img
 from app.services.iris_service import _extract_image_urls, parse_iris_webhook
@@ -88,3 +89,27 @@ class ImageCommandUsageTests(unittest.IsolatedAsyncioTestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class EnglishImagePromptTests(unittest.IsolatedAsyncioTestCase):
+    async def test_english_prompt_is_not_translated(self):
+        with mock.patch.object(img, "light_llm") as fake:
+            out = await img._english_image_prompt("a cat on a sofa")
+        self.assertEqual(out, "a cat on a sofa")
+        fake.ainvoke.assert_not_called()
+
+    async def test_korean_prompt_is_translated(self):
+        fake = mock.Mock()
+        fake.ainvoke = mock.AsyncMock(return_value=mock.Mock(content='"grilled beef intestines, food photo"'))
+        with mock.patch.object(img, "light_llm", fake):
+            out = await img._english_image_prompt("곱창 사진")
+        self.assertEqual(out, "grilled beef intestines, food photo")
+
+    async def test_falls_back_to_original_on_failure(self):
+        fake = mock.Mock()
+        fake.ainvoke = mock.AsyncMock(side_effect=RuntimeError("boom"))
+        with mock.patch.object(img, "light_llm", fake):
+            self.assertEqual(await img._english_image_prompt("곱창 사진"), "곱창 사진")
+        fake.ainvoke = mock.AsyncMock(return_value=mock.Mock(content="구운 곱창"))
+        with mock.patch.object(img, "light_llm", fake):
+            self.assertEqual(await img._english_image_prompt("곱창 사진"), "곱창 사진")

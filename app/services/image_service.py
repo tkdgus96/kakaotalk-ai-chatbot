@@ -14,6 +14,7 @@ from __future__ import annotations
 
 import base64
 import io
+import re
 import time
 
 import httpx
@@ -21,7 +22,7 @@ from langchain_core.messages import HumanMessage
 from openai import AsyncOpenAI
 
 from app.config import settings
-from app.dependencies import llm, logger
+from app.dependencies import light_llm, llm, logger
 
 IMAGE_COMMANDS = {"!그림", "!이미지", "!짤"}
 _RECENT_IMAGE_TTL = 30 * 60  # 30 min
@@ -263,11 +264,42 @@ async def generate_image_b64(prompt: str) -> str | None:
         return None
 
     if settings.image_gen_provider == "pollinations":
-        b64 = await _gen_pollinations_b64(prompt)
+        b64 = await _gen_pollinations_b64(await _english_image_prompt(prompt))
         if b64:
             return b64
         logger.info("pollinations gen failed; falling back to openai")
     return await _gen_openai_b64(prompt)
+
+
+_HANGUL_RE = re.compile(r"[\u3131-\u318e\uac00-\ud7a3]")
+
+_TRANSLATE_PROMPT = (
+    "Rewrite the following image request as one English prompt for a text-to-image model. "
+    "Describe the subject concretely (what it is and what it looks like), because the model does not "
+    "know Korean words or Korean proper nouns; e.g. '곱창' -> 'Korean grilled beef intestines (gopchang) "
+    "sizzling on a grill pan'. Keep any style or composition the user asked for. If the request asks for "
+    "a photo, make it a realistic photo. Do not add people unless the request mentions them. "
+    "Output the prompt only.\n\nRequest: "
+)
+
+
+async def _english_image_prompt(prompt: str) -> str:
+    """Pollinations (FLUX) ignores Korean text and draws something unrelated,
+    so a prompt containing Hangul is rewritten in English first. On failure the
+    original prompt is used."""
+    if not _HANGUL_RE.search(prompt):
+        return prompt
+    try:
+        res = await light_llm.ainvoke([HumanMessage(content=_TRANSLATE_PROMPT + prompt)])
+        text = res.content if isinstance(res.content, str) else ""
+        text = text.strip().strip('"')
+        if text and not _HANGUL_RE.search(text):
+            logger.info("image prompt translated: %r -> %r", prompt, text)
+            return text
+        logger.warning("image prompt translation unusable: %r", text[:120])
+    except Exception as e:
+        logger.warning("image prompt translation failed: %s", e)
+    return prompt
 
 
 async def _gen_pollinations_b64(prompt: str) -> str | None:
